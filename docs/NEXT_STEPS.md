@@ -1,6 +1,6 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-06-25  
+**Last Updated:** 2026-06-26  
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot, expanding to additional cities
 
@@ -24,44 +24,47 @@
   - Renamed: `_is_relevant_for_uc4()` → `_is_relevant_type()`
 - Applied relevance filter to **all** use cases (UC1, UC2, UC4) — minor-work permits like "הוספת גלריה" no longer leak through UC1
 
-### Session C — 2026-06-26
+### Session C — 2026-06-26 (handoff A)
 - Explored `C:\R_PROJECTS\local_committee_scrapers` — found working Complot (API) and Bartech (Selenium) scrapers; `bartech/permits.py` is a stub
-- Fixed 9 bugs in `scrapers/complot/scraper.py` (see `SESSION_HANDOFF_2026_06_26_A.md` for full list):
-  - ChromeDriver version mismatch → auto-detect Chrome version from registry
-  - Download button intercepted by sticky header → JS click
-  - Excel title row → `header=1`; column detected by name `מספר בקשה(רישוי זמין)`
-  - **Root cause**: double `#` in detail URL — `base_url` had search hash so `#request/20250` was appended after it, giving `#search/...#request/20250`. SPA ignored everything after second `#`. Fixed with `self.origin = url.split('#')[0]`
-  - Wait condition: `top-navbar-info-desc` (non-existent) → `#table-gushim-helkot`
-  - Events section: h3 XPath → direct `#table-events table` CSS selector
-  - Added `'הפקת תעודת גמר': 'טופס 4'` to `EVENT_TO_STATUS`
-  - `_clean_number`: preserve slashes/hyphens in permit IDs
-  - UTF-8 stdout for Hebrew in error messages
+- Fixed 9 bugs in `scrapers/complot/scraper.py` (see `SESSION_HANDOFF_2026_06_26_A.md` for full list)
 - Added `year_filter` parameter to `ComplotScraper` — filters by `תאריך הגשה` year
 - Verified: 20/20 success, G:True T:True D:True S:status
+
+### Session D — 2026-06-26 (handoff B)
+- Ported anti-detection from `browser_utils.py` into `scraper.py`: viewport randomization, Hebrew language
+  prefs, page load timeout, `_handle_privacy_dialog()` method, initial sleep 20s, browser restart warm-up
+- **Discovered CAPTCHA is persistent and reappears after manual solve** — Selenium scraper not viable
+- **Investigated `handasi.complot.co.il` backend** (no Cloudflare) — found complete API architecture:
+  - `GetBakashotByNumber` → full permit list, 521 rows, no auth (one HTTP call)
+  - `GetBakashaFile` → permit detail, **blocked** for all permits (authentication required)
+  - `GetTikFile` → building file, full data, no auth — `table-requests` has `ארוע אחרון להצגה`
+    which is exactly the `permit_status` field we need
+- Confirmed field mapping from column headers (see `SESSION_HANDOFF_2026_06_26_B.md`)
+- Found via `_routes.min.js` at `handasi.complot.co.il/handasi2016/Scripts/Complot/request/min/`
 
 ---
 
 ## Immediate — Do First Next Session
 
-### 1. Handle CAPTCHA / "I'm not a robot" on the permit detail page
-During testing the Chrome window was blocked by an anti-bot challenge before reaching a permit
-detail page. `undetected_chromedriver` normally bypasses this but it may trigger intermittently.
-Options to try in order:
-- Run with `headless=False` (already the case) — let the challenge solve itself on first load
-- Add a longer sleep after the first `driver.get(self.base_url)` (currently 10s — try 20s)
-- If it still blocks: open the Chrome window manually, solve it once, then allow the scraper to
-  continue (the cookie persists for the session)
-- Longer term: look at how `local_committee_scrapers/base/browser_utils.py` handles this
+### 1. Build `scrapers/complot/api_scraper.py` — API-based, no Selenium
 
-### 2. Test year filter and run full scrape
-`YEARS = [2025, 2026]` is already set in `run_bat_yam.py`.
-Run with `max_requests = 20` first to confirm year filter works (log should show
-"Year filter [2025, 2026]: 520 -> N permits").
-Then set `max_requests = None` for the full scrape.
+```
+API_BASE = "https://handasi.complot.co.il/magicscripts/mgrqispi.dll"
+Bat Yam site_id = 81
 
-### 3. Discover "היתר בתנאים" event text
-After scraping 2025 permits, find one that reached `היתר בתנאים` stage, open in browser,
-read the exact `תיאור אירוע` text, add to `EVENT_TO_STATUS` in the scraper.
+Step 1: GetBakashotByNumber → list (permit_num, building_id, date, address, gush, helka, requestor)
+         Filter by year if set
+Step 2: For each unique building_id → GetTikFile → table-requests → ארוע אחרון להצגה
+Step 3: Merge → emit permit records in same schema as Selenium scraper
+```
+
+See `SESSION_HANDOFF_2026_06_26_B.md` for full param details and event-status values found in the wild.
+
+### 2. Update `run_bat_yam.py` to use `ComplotPermitsAPI`
+
+### 3. Validate and expand `EVENT_TO_STATUS`
+- Spot-check permit 20250 → `טופס 4` (from `הפקת תעודת גמר`)
+- Add: `הפקת היתר בניה לחתימות` → `היתר`
 
 ### 4. Re-run matcher against fresh data
 ```python
@@ -104,7 +107,8 @@ After the manual-review cycle is validated:
 
 | Path | Role |
 |---|---|
-| `scrapers/complot/scraper.py` | Scraper — `EVENT_TO_STATUS` dict at top |
+| `scrapers/complot/scraper.py` | Old Selenium scraper — superseded by API approach |
+| `scrapers/complot/api_scraper.py` | **To be created** — API-based, no Selenium |
 | `transform/matcher.py` | Matching + report — `RELEVANT_TYPE_SUBSTRINGS` list |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |

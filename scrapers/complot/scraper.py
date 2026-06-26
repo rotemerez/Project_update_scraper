@@ -93,8 +93,9 @@ class ComplotScraper:
             driver = self._init_driver()
             _log(f'Navigating to {self.base_url}')
             driver.get(self.base_url)
-            time.sleep(10)
+            time.sleep(20)  # extra time for anti-bot challenge to pass on first load
 
+            self._handle_privacy_dialog(driver)
             self._close_modals(driver)
             self._click_show_all(driver)
 
@@ -116,7 +117,11 @@ class ComplotScraper:
                     driver.quit()
                     time.sleep(2)
                     driver = self._init_driver()
-                    time.sleep(3)
+                    # Warm up: visit base URL so cookies/anti-bot state are established
+                    # before we start loading individual detail pages
+                    driver.get(self.base_url)
+                    time.sleep(10)
+                    self._handle_privacy_dialog(driver)
 
                 clean = self._clean_number(raw_number)
                 if not clean:
@@ -550,6 +555,11 @@ class ComplotScraper:
     def _init_driver(self):
         _log('Launching Chrome...')
         import subprocess
+
+        # Randomize viewport — same size every run is a bot fingerprint
+        viewports = [(1920, 1080), (1366, 768), (1536, 864), (1440, 900), (1600, 900), (1280, 720)]
+        width, height = random.choice(viewports)
+
         chrome_version = None
         try:
             result = subprocess.run(
@@ -563,11 +573,69 @@ class ComplotScraper:
                     break
         except Exception:
             pass
-        kwargs = dict(suppress_welcome=True, headless=self.headless, no_sandbox=True)
+
+        options = uc.ChromeOptions()
+        if self.headless:
+            options.add_argument('--headless=new')
+        options.add_argument(f'--window-size={width},{height}')
+        # Hebrew language prefs signal to Cloudflare/bot detectors this is a legit Israeli-site visitor
+        options.add_experimental_option('prefs', {
+            'intl.accept_languages': 'he-IL,he,en-US,en',
+        })
+
+        kwargs = dict(options=options, suppress_welcome=True, no_sandbox=True)
         if chrome_version:
             _log(f'Detected Chrome major version: {chrome_version}')
             kwargs['version_main'] = chrome_version
-        return uc.Chrome(**kwargs)
+
+        driver = uc.Chrome(**kwargs)
+        driver.set_page_load_timeout(30)
+        return driver
+
+    def _handle_privacy_dialog(self, driver) -> bool:
+        """
+        Dismiss Complot's privacy/terms dialog if present.
+        Strategy 1: cap-banner cookie popup (button.cap-popup-accept).
+        Strategy 2: 'אשר וסגור' confirm-and-close button/link.
+        """
+        # Strategy 1: cap-banner
+        try:
+            WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.ID, 'cap-banner'))
+            )
+            accept = WebDriverWait(driver, 2).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button.cap-popup-accept'))
+            )
+            driver.execute_script('arguments[0].scrollIntoView(true);', accept)
+            time.sleep(0.5)
+            driver.execute_script('arguments[0].click();', accept)
+            _log('  [privacy] cap-banner dismissed')
+            time.sleep(1)
+            return True
+        except Exception:
+            pass
+
+        # Strategy 2: אשר וסגור button / link
+        for xpath in [
+            "//button[contains(text(),'אשר וסגור')]",
+            "//input[@value='אשר וסגור']",
+            "//a[contains(text(),'אשר וסגור')]",
+            "//*[contains(text(),'אשר וסגור') and (name()='button' or name()='input' or name()='a')]",
+        ]:
+            try:
+                btn = WebDriverWait(driver, 2).until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
+                driver.execute_script('arguments[0].scrollIntoView(true);', btn)
+                time.sleep(0.5)
+                btn.click()
+                _log('  [privacy] terms dialog dismissed')
+                time.sleep(1)
+                return True
+            except Exception:
+                continue
+
+        return False
 
     def _close_modals(self, driver):
         try:
