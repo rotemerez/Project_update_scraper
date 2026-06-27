@@ -150,10 +150,13 @@ def run(
             scraped_status = str(permit.get('permit_status', '') or '').strip()
             scraped_date = str(permit.get('permit_status_date', '') or '').strip()
 
-            if not _is_relevant_type(permit.get('request_type', '')):
-                pass  # UC3: minor-work permit, irrelevant regardless of project status
+            # UC2: project already exists in Madlan — skip type filter (project is known relevant).
+            # UC1: pre-request project, type filter still applied to avoid minor-work false positives
+            #      BUT skip filter when request_type is empty (API doesn't provide it).
+            type_known = bool(str(permit.get('request_type', '') or '').strip())
+            type_relevant = _is_relevant_type(str(permit.get('request_type', '') or ''))
 
-            elif db_status_raw == 'טרום בקשה':
+            if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known):
                 # UC1: pre-request project, relevant permit now found
                 report_rows.append(_make_row(
                     use_case='UC1',

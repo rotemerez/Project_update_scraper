@@ -6,19 +6,17 @@ Test mode: set max_requests to a small number first to verify.
 Full mode:  set max_requests = None.
 """
 
-from scrapers.complot.scraper import ComplotScraper
+from scrapers.complot.api_scraper import ComplotPermitsAPI
 import pandas as pd
 import os
 
-YEARS = [2025, 2026]  # only scrape permits submitted in these years
-
-scraper = ComplotScraper(
+scraper = ComplotPermitsAPI(
+    site_id=81,
     city_name_hebrew='בת ים',
-    url='https://batyam.complot.co.il/iturbakashot/#search/GetBakashotByNumber&siteid=81&grp=0&t=0&b=2025&l=false&arguments=siteId,grp,t,b,l',
-    headless=False,
-    year_filter=YEARS,
+    # b_params defaults to range(2011, 2027) — covers full permit history
+    # year_filter=None means keep all dates; set e.g. [2020,2021,...] to narrow output
 )
-scraper.max_requests = 20  # set to None for full scrape
+scraper.max_requests = None  # set to int for testing
 
 permits = scraper.scrape()
 

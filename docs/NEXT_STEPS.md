@@ -1,6 +1,6 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-06-26  
+**Last Updated:** 2026-06-27  
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot, expanding to additional cities
 
@@ -42,31 +42,32 @@
 - Confirmed field mapping from column headers (see `SESSION_HANDOFF_2026_06_26_B.md`)
 - Found via `_routes.min.js` at `handasi.complot.co.il/handasi2016/Scripts/Complot/request/min/`
 
+### Session E — 2026-06-27 (handoff A)
+- Built `scrapers/complot/api_scraper.py` — complete API scraper, no Selenium
+  - `ComplotPermitsAPI` with `GetBakashotByNumber` + `GetTikFile` per building
+  - Table finder uses header text search (not id — `table-requests` id absent in real HTML)
+  - `EVENT_TO_STATUS` expanded: `היתר היסטורי` → `היתר`, `בקשה ללא היתר` → `בקשה להיתר`, `הפקת היתר בניה לחתימות` → `היתר`
+  - `permit 20250` → `טופס 4` confirmed ✓
+- Discovered `b=` is substring match on permit number, not year filter
+  - Expanded to `b_params=range(2011, 2027)` — cycles 16 year-series, deduplicates by permit_num
+- **Full scrape completed**: 9,639 unique permits (2011–2026), saved to `outputs/bat_yam_fresh.xlsx`
+- Fixed `transform/matcher.py`:
+  - UC2 no longer blocked by empty `request_type` (project already exists in Madlan → relevant by definition)
+  - `NaN` coercion for `request_type` from Excel
+- **Matcher returns 0 rows** — gush-helka intersection appears to be empty; root cause not yet confirmed
+
 ---
 
 ## Immediate — Do First Next Session
 
-### 1. Build `scrapers/complot/api_scraper.py` — API-based, no Selenium
+### 1. Debug matcher — find why 0 matches
 
-```
-API_BASE = "https://handasi.complot.co.il/magicscripts/mgrqispi.dll"
-Bat Yam site_id = 81
+Run the diagnostic in `SESSION_HANDOFF_2026_06_27_A.md` to confirm:
+- How many projects have `גוש-חלקה` filled?
+- How many permits have `block_lot` non-empty?
+- What is the actual intersection size?
 
-Step 1: GetBakashotByNumber → list (permit_num, building_id, date, address, gush, helka, requestor)
-         Filter by year if set
-Step 2: For each unique building_id → GetTikFile → table-requests → ארוע אחרון להצגה
-Step 3: Merge → emit permit records in same schema as Selenium scraper
-```
-
-See `SESSION_HANDOFF_2026_06_26_B.md` for full param details and event-status values found in the wild.
-
-### 2. Update `run_bat_yam.py` to use `ComplotPermitsAPI`
-
-### 3. Validate and expand `EVENT_TO_STATUS`
-- Spot-check permit 20250 → `טופס 4` (from `הפקת תעודת גמר`)
-- Add: `הפקת היתר בניה לחתימות` → `היתר`
-
-### 4. Re-run matcher against fresh data
+Then fix whichever side is wrong (format mismatch, empty data, etc.) and re-run:
 ```python
 from transform import matcher
 matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'outputs/bat_yam_report.xlsx')
