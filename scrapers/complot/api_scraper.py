@@ -97,6 +97,16 @@ def _map_event(event: str) -> str:
     return ''
 
 
+def _earlier_date(a: str, b: str) -> bool:
+    """Return True if date string a is chronologically earlier than b (DD/MM/YYYY or DD.MM.YYYY)."""
+    for fmt in ('%d/%m/%Y', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(a, fmt) < datetime.strptime(b, fmt)
+        except ValueError:
+            continue
+    return False
+
+
 class ComplotPermitsAPI:
     """
     API-based permit scraper for Complot municipal sites.
@@ -237,7 +247,7 @@ class ComplotPermitsAPI:
                 row_data.get('מספר בקשה(רישוי זמין)') or
                 row_data.get('מספר בקשה') or
                 row_data.get("מס' בקשה") or
-                cells[0].get_text(strip=True)
+                next(cells[0].stripped_strings, '')  # avoids concatenating rishuy-zamin number
             )
             if not permit_num:
                 continue
@@ -274,6 +284,7 @@ class ComplotPermitsAPI:
         best_event = ''
         best_event_date = ''
         best_rank = -1
+        first_event_date = ''
 
         if event_table:
             headers = _extract_headers(event_table)
@@ -295,6 +306,11 @@ class ComplotPermitsAPI:
                 event_desc = _cell(desc_col)
                 event_date = _cell(date_col)
 
+                # Track earliest event date across all rows
+                if event_date:
+                    if not first_event_date or _earlier_date(event_date, first_event_date):
+                        first_event_date = event_date
+
                 status = _map_event(event_desc)
                 rank = STATUS_ORDER.index(status) if status in STATUS_ORDER else -1
                 if rank > best_rank:
@@ -310,6 +326,7 @@ class ComplotPermitsAPI:
             'request_category': request_category,
             'event':            best_event,
             'event_date':       best_event_date,
+            'first_event_date': first_event_date,
         }
 
     # ------------------------------------------------------------------
@@ -331,6 +348,7 @@ class ComplotPermitsAPI:
             'requestor':           raw.get('requestor', ''),
             'permit_status':       permit_status,
             'permit_status_date':  detail.get('event_date', ''),
+            'first_event_date':    detail.get('first_event_date', ''),
             'scrape_status':       scrape_status,
         }
 

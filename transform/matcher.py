@@ -182,13 +182,21 @@ def run(
         if min_year:
             print(f'[INFO] Auto-computed min_year={min_year} from projects file')
 
-    # Year cutoff filter
+    # Year cutoff filters — permits with no date are kept (can't filter what we don't have).
+    # Filter 1: permit_status_date (the date of the highest-ranked milestone event).
+    # Filter 2: first_event_date (earliest event in the events table — catches old permits
+    #           whose first event predates the cutoff even if recent activity exists).
     if min_year is not None:
+        def _passes_year(v):
+            y = _year_of(v)
+            return y == 0 or y >= min_year
         before = len(permits_df)
-        permits_df = permits_df[permits_df['request_date'].apply(
-            lambda v: _year_of(v) >= min_year
-        )]
-        print(f'[INFO] min_year={min_year}: {before} -> {len(permits_df)} permits')
+        permits_df = permits_df[permits_df['permit_status_date'].apply(_passes_year)]
+        print(f'[INFO] min_year={min_year}: {before} -> {len(permits_df)} permits (permit_status_date filter)')
+        if 'first_event_date' in permits_df.columns:
+            before = len(permits_df)
+            permits_df = permits_df[permits_df['first_event_date'].apply(_passes_year)]
+            print(f'[INFO] min_year={min_year}: {before} -> {len(permits_df)} permits (first_event_date filter)')
 
     # Excluded request categories (e.g. בקשה מקדמית)
     if excluded_categories and 'request_category' in permits_df.columns:

@@ -1,6 +1,6 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-06-27  
+**Last Updated:** 2026-06-28  
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot, expanding to additional cities
 
@@ -72,6 +72,38 @@
 - Added file placement rules to `CLAUDE.md`
 - **Re-scrape triggered** with updated event mapping — running in background (~47 min)
 
+### Session I — 2026-06-28 (handoff C)
+- **Built Bartech scraper**: `scrapers/bartech/api_scraper.py` + `scripts/run_holon.py`
+  - Smoke-tested against Holon; fixed two bugs found during test (see BUG-004, BUG-005)
+  - Full Holon scrape running (~15:40 expected completion)
+- **Fixed matcher year filter (BUG-006)**: was filtering by `request_date` (DB record creation date,
+  not a real milestone); now filters by `permit_status_date`. Empty status date passes through.
+- **Added `first_event_date` capture** to Complot scraper + second filter pass in matcher.
+  Catches old permits whose first event predates the cutoff even if recent activity exists.
+  Requires re-scrape to take effect.
+- **Fixed permit number concatenation bug (BUG-007)**: `get_text(strip=True)` on the list-page
+  cell concatenated the request number and rishuy zamin number → changed to
+  `next(cells[0].stripped_strings, '')` to take only the first text node.
+- **Bat Yam re-scrape running** (~15:04 start) — picks up BUG-007 fix + `first_event_date`
+- **Bat Yam matcher run** (prior scrape): 623 rows — `new_permit`: 222, `status_advanced`: 79,
+  `untracked`: 322
+- **Updated CLAUDE.md**: documented the only working method for background scrapes (`Start-Process`
+  with `-WorkingDirectory` + absolute paths) plus 4 methods that do NOT work
+- **Holon backoffice export available**: `docs/holon_28062026.xlsx` (500 projects)
+
+### Session H — 2026-06-28 (handoff B)
+- **Bartech architecture fully discovered** — no Selenium needed, plain HTTP works
+  - reCAPTCHA not validated server-side — any token value passes
+  - Endpoint: `GET /SearchPermitApplicationResults/?searchType=ByDetails&TypeOfPermit=X&g-recaptcha-response=x&page=N`
+  - `TypeOfPermit` filter works; `ApplicationDescription` free-text search is broken (do not use)
+  - 6 types to scrape (exclude 55=info, 63=apartment map); type 51 dominates (5089 pages for Holon)
+  - HTML structure: Label10=status, Label11=address, Label12=gush/helka (ToolTip), Label13=applicant, Label14=description
+  - Entity_Number from detail link href; date from `span.phone` with "תאריך פתיחה"
+  - Status vocab: `מאושר` → `היתר`, `פעיל`/admin statuses → `בקשה להיתר`, `לא פעיל` → ''
+- **Bat Yam re-scrape started** — running in background (~52% at session end, log: `outputs/scrape_log_2026_06_28.txt`)
+- **Created** `scrapers/bartech/__init__.py`
+- **Full scraper spec** written in `SESSION_HANDOFF_2026_06_28_B.md` — ready to implement
+
 ### Session G — 2026-06-28 (handoff C)
 - **Removed fabricated data**: stripped `or 'בקשה להיתר'` fallback from `matcher.py` — blank
   `scraped_status` is now honest; all 414 rows had been falsely showing `בקשה להיתר`
@@ -95,32 +127,36 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Re-scrape with updated scraper, then run matcher
-Session G rewrote the scraper to use `GetBakashaFile` per permit (instead of GetTikFile).
-This now returns `request_type` (תיאור הבקשה) and `request_category` (סוג הבקשה) per permit.
-Run from project root:
-```
-python scripts/run_bat_yam.py
-```
-Then run matcher (min_year auto-computed as 2011 from bat_yam.xlsx):
+### 1. Bat Yam re-scrape completing
+Re-scrape started ~15:04 (log: `outputs/scrape_log_2026_06_28_C.txt`). Once done, run matcher:
 ```python
 from transform import matcher
 matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'outputs/bat_yam_report.xlsx')
 ```
-Expected: fewer rows (excluded categories + year filter applied), meaningful `scraped_status`
-values, and possibly some `status_advanced` rows.
 
-### 2. Review the report
-Open `outputs/bat_yam_report.xlsx` and check:
-- Do `type_confirmed=True` rows have sensible `request_type` values?
-- Are `request_category` values making sense? Any new categories to add to the exclude list?
-- Any false positives in `new_permit` rows?
+### 2. Holon scrape + matcher
+Holon scrape started ~12:55 (log: `outputs/holon_scrape_log_2026_06_28.txt`).
+Expected completion ~15:40. Once done:
+```python
+from transform import matcher
+matcher.run(
+    'docs/holon_28062026.xlsx',
+    'outputs/holon_fresh.xlsx',
+    'חולון',
+    'outputs/holon_report.xlsx',
+    excluded_categories=set(),   # Bartech excludes bad types at scrape time
+)
+```
 
-### 3. [USER ACTION] Investigate בקשה מקדמית handling
-Request 20211734 (גוש 7141-52) was a `בקשה מקדמית` with description `תמ"א 38- הריסה ובנייה`.
-It was closed without a permit (`סיום טיפול בבקשה להיתר ללא הוצאת היתר`).
-Confirm: is the project at גוש 7141-52 still being pursued under a separate real permit request?
-If yes, is there a separate non-preliminary permit we should be tracking?
+### 3. Classify `שובץ לישיבת ועדה` Bartech status
+This status ("scheduled for committee meeting") appeared during the Holon scrape but was not
+mapped — user asked not to assume. Review against the backoffice norms and add to
+`STATUS_MAP` in `scrapers/bartech/api_scraper.py` once confirmed.
+
+### 4. Review Bat Yam + Holon reports
+- `type_confirmed=True` rows: request_type values sensible?
+- `status_advanced` rows: correct upgrades?
+- Any new unmapped statuses in logs?
 
 ---
 
@@ -167,8 +203,10 @@ After the manual-review cycle is validated:
 | Path | Role |
 |---|---|
 | `scrapers/complot/scraper.py` | Old Selenium scraper — superseded by API approach |
-| `scrapers/complot/api_scraper.py` | API-based scraper — working |
+| `scrapers/complot/api_scraper.py` | Complot API scraper — working |
+| `scrapers/bartech/api_scraper.py` | Bartech API scraper — working, smoke-tested |
 | `scripts/run_bat_yam.py` | Runner — uses `ComplotPermitsAPI`, `max_requests=None` |
+| `scripts/run_holon.py` | Runner — Holon (Bartech), scrape in progress |
 | `transform/matcher.py` | Matching + report — `RELEVANT_TYPE_SUBSTRINGS` list |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |

@@ -79,6 +79,54 @@ analysis script, put it in `scripts/`.
 
 ---
 
+## Running Python Scripts
+
+**Python executable:** `C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe`
+
+Background tasks and subshells do not inherit the working directory, so `from scrapers...`
+imports fail with `ModuleNotFoundError`. Always set `PYTHONPATH` explicitly:
+
+```bash
+# From Bash tool (foreground only — do NOT use & or run_in_background for scrapers):
+PYTHONPATH=/c/R_PROJECTS/Project_update_scraper \
+  /c/Users/Rotem/AppData/Local/Programs/Python/Python313/python.exe \
+  scripts/run_bat_yam.py
+
+# From PowerShell (foreground):
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
+& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_bat_yam.py
+```
+
+### Running Long Scrapers in the Background
+
+Use `Start-Process` from PowerShell — the **only reliable method** for background scrapes.
+Three requirements: `-WorkingDirectory`, absolute paths for log files, `-NoNewWindow`.
+
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
+$env:PYTHONUTF8 = '1'
+Start-Process `
+  -FilePath 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' `
+  -ArgumentList 'c:\R_PROJECTS\Project_update_scraper\scripts\run_bat_yam.py' `
+  -WorkingDirectory 'c:\R_PROJECTS\Project_update_scraper' `
+  -RedirectStandardOutput 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_CITY.txt' `
+  -RedirectStandardError  'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_err_CITY.txt' `
+  -NoNewWindow
+```
+
+Check progress with:
+```powershell
+Get-Content 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_CITY.txt' -Tail 5
+```
+
+**What does NOT work — do not retry these:**
+- Bash `& ` background (`python script.py &`) — process starts but log stays empty
+- Bash `run_in_background=true` with `>` redirect — output goes to task file, not the log file
+- PowerShell `Start-Job` — job IDs don't survive across separate PowerShell tool invocations
+- `Start-Process` without `-WorkingDirectory` — script runs from wrong dir, silent failure
+
+---
+
 ## Development Guidelines
 
 ### Windows Console Compatibility
