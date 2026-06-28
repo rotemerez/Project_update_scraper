@@ -154,13 +154,21 @@ def run(
     city_hebrew: str,
     output_path: str,
     min_year: Optional[int] = None,
+    excluded_categories: Optional[set] = None,
 ) -> pd.DataFrame:
     """
     Load projects and permits files, run matching, write flagged report to output_path.
 
     min_year: if set, permits with request_date year < min_year are excluded.
+              Defaults to auto-computed from projects file (earliest permit date without Form 4).
+    excluded_categories: set of request_category values to filter out before matching.
+              Defaults to EXCLUDED_REQUEST_CATEGORIES. Pass an empty set to disable.
+              NOTE: in פתח תקווה and הרצליה, 'בקשה מקדמית' advances to a real permit
+              without being closed and reopened -- do NOT exclude it for those cities.
     Returns the report DataFrame.
     """
+    if excluded_categories is None:
+        excluded_categories = EXCLUDED_REQUEST_CATEGORIES
     projects_df = pd.read_excel(projects_path)
     permits_df = pd.read_excel(permits_path)
 
@@ -183,10 +191,10 @@ def run(
         print(f'[INFO] min_year={min_year}: {before} -> {len(permits_df)} permits')
 
     # Excluded request categories (e.g. בקשה מקדמית)
-    if 'request_category' in permits_df.columns:
+    if excluded_categories and 'request_category' in permits_df.columns:
         before = len(permits_df)
         permits_df = permits_df[~permits_df['request_category'].apply(
-            lambda v: _clean(v) in EXCLUDED_REQUEST_CATEGORIES
+            lambda v: _clean(v) in excluded_categories
         )]
         excluded = before - len(permits_df)
         if excluded:
