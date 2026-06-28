@@ -101,6 +101,17 @@ Rules:
 - Think before writing: scraper logic, field mapping, and validation rules should be
   reasoned through before implementation
 
+### Data Integrity — No Invented Values
+**Never fabricate or infer field values that did not come from a real data source.**
+
+If a field was not returned by the API or scraper, leave it empty. Do not:
+- Default a status field to an assumed value (e.g. `scraped_status or 'בקשה להיתר'`)
+- Fill in a date from a proxy field when the real date is missing
+- Infer a value from context, naming, or "reasonable assumption"
+
+A blank cell in the report is honest. A fabricated value is worse than no value — it will
+be trusted and entered into the system as real data. If data is absent, surface the absence.
+
 ### Living Document — NEXT_STEPS.md
 `docs/NEXT_STEPS.md` is the single source of truth for project status.
 - Read it at the start of every session to orient quickly
@@ -120,10 +131,26 @@ Key rules when mapping scraped data to backoffice fields:
 - Project name: marketing name + city, or address + city if no marketing name
 - Developer: link to parent company (not project-specific subsidiary), verify in company registry
 - Construction type (`סוג בניה`): תמ"א 38, בניה חדשה, פינוי בינוי, etc. — follow classification rules
-- Minimum 3 units for new construction (4 for attached housing by same developer)
+- Minimum 3 units for new construction (4 for attached housing by same developer); תמ"א 38 has no minimum
 - Build stage: בתכנון until permit issued; בניה until Form 4; הסתיים after Form 4
 - Don't show suspended/rejected projects publicly — set hidden, don't delete
 - Parcel (גוש/חלקה): required for transaction linkage; from govmap
+
+**Excluded permit request categories (סוג הבקשה)** — these precede official permit submission
+and must never be treated as real permit requests (source: נוהל הקמת פרויקטים מאי 2023):
+- `בקשה מקדמית` — preliminary inquiry
+- `בקשה עקרונית` — in-principle request
+- `בקשה למידע` — information request
+- `בקשה לתיאום מקדים` — early coordination request
+- `תהליך ראשוני` — initial process (pre-submission)
+
+**Trackable construction types (תיאור הבקשה substrings)**:
+`בניה חדשה`, `הריסה ובניה`, `תמ"א 38`, `חיזוק ותוספת`, `פינוי בינוי`, `בינוי פינוי`,
+`עיבוי בינוי`, `שימור`, `צמודי קרקע`, `תיקון 139`
+
+**Project timeframe**: Track permit requests submitted up to 10 years ago that have not yet been
+occupied. Auto-compute `min_year` from the earliest `תאריך בקשה להיתר` among in-progress
+projects (without `תאריך קבלת טופס 4`) in the projects file.
 
 ---
 

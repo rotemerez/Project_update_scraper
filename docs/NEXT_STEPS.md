@@ -72,24 +72,55 @@
 - Added file placement rules to `CLAUDE.md`
 - **Re-scrape triggered** with updated event mapping — running in background (~47 min)
 
+### Session G — 2026-06-28 (handoff C)
+- **Removed fabricated data**: stripped `or 'בקשה להיתר'` fallback from `matcher.py` — blank
+  `scraped_status` is now honest; all 414 rows had been falsely showing `בקשה להיתר`
+- **Discovered `GetBakashaFile` is accessible** — the permit detail page returns:
+  - `תיאור הבקשה` (request description / construction type)
+  - `סוג הבקשה` (permit category, e.g. `בקשה מקדמית`)
+  - Per-permit events table with accurate status and date
+- **Rewrote scraper** (`scrapers/complot/api_scraper.py`): replaced `GetTikFile` (per-building)
+  with `GetBakashaFile` (per-permit) — runtime ~80 min, but data is accurate
+- **Added `request_category` exclusion filter** to `matcher.py`:
+  excludes `בקשה מקדמית`, `בקשה עקרונית`, `בקשה למידע`, `בקשה לתיאום מקדים`, `תהליך ראשוני`
+  (source: נוהל הקמת פרויקטים מאי 2023)
+- **Added `min_year` auto-computation**: derived from earliest `תאריך בקשה להיתר` among
+  in-progress projects (without טופס 4); for Bat Yam = 2011
+- **Added report columns**: `project_sug_bnia`, `type_confirmed`, `request_category`
+- **Added `חיזוק ותוספת` and `צמודי קרקע`** to `RELEVANT_TYPE_SUBSTRINGS`
+- **Updated CLAUDE.md**: data integrity rule, excluded categories, trackable types, timeframe rule
+- Re-scrape required — GetBakashaFile data not yet scraped for 9,639 permits
+
 ---
 
 ## Immediate — Do First Next Session
 
-### 1. Check re-scrape results and run matcher
-The re-scrape started during session F. Once `outputs/bat_yam_fresh.xlsx` is updated, run:
+### 1. Re-scrape with updated scraper, then run matcher
+Session G rewrote the scraper to use `GetBakashaFile` per permit (instead of GetTikFile).
+This now returns `request_type` (תיאור הבקשה) and `request_category` (סוג הבקשה) per permit.
+Run from project root:
+```
+python scripts/run_bat_yam.py
+```
+Then run matcher (min_year auto-computed as 2011 from bat_yam.xlsx):
 ```python
 from transform import matcher
 matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'outputs/bat_yam_report.xlsx')
 ```
-Expected: same ~414 `new_permit` rows + some `status_advanced` rows now that 3 new event
-types are mapped. If `status_advanced` is still 0, investigate further.
+Expected: fewer rows (excluded categories + year filter applied), meaningful `scraped_status`
+values, and possibly some `status_advanced` rows.
 
 ### 2. Review the report
-Open `outputs/bat_yam_report.xlsx` and spot-check a sample of `new_permit` rows:
-- Do the matched projects look right?
-- Are the addresses/gush-helka reasonable?
-- Any obvious false positives?
+Open `outputs/bat_yam_report.xlsx` and check:
+- Do `type_confirmed=True` rows have sensible `request_type` values?
+- Are `request_category` values making sense? Any new categories to add to the exclude list?
+- Any false positives in `new_permit` rows?
+
+### 3. [USER ACTION] Investigate בקשה מקדמית handling
+Request 20211734 (גוש 7141-52) was a `בקשה מקדמית` with description `תמ"א 38- הריסה ובנייה`.
+It was closed without a permit (`סיום טיפול בבקשה להיתר ללא הוצאת היתר`).
+Confirm: is the project at גוש 7141-52 still being pursued under a separate real permit request?
+If yes, is there a separate non-preliminary permit we should be tracking?
 
 ---
 
