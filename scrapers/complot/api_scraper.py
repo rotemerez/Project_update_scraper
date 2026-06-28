@@ -34,10 +34,17 @@ API_BASE = "https://handasi.complot.co.il/magicscripts/mgrqispi.dll"
 # Map event description substrings to status vocabulary.
 # Keys are matched as substrings; first match wins. Ordered from most to least specific.
 EVENT_TO_STATUS: Dict[str, str] = {
+    # טופס 4
     'הפקת תעודת גמר':              'טופס 4',
+    'מסירת תעודת גמר':             'טופס 4',        # completion certificate delivered to applicant
+    # היתר
     'מתן היתר למבקש':              'היתר',
     'הפקת היתר בניה לחתימות':     'היתר',
-    'היתר היסטורי':                'היתר',          # historical permit = permit was issued
+    'היתר היסטורי':                'היתר',
+    'מסירת היתר(בסמכות מהנדס)':   'היתר',          # permit delivered under engineer's authority
+    # היתר בתנאים
+    'החלטה לאשר בתנאי/ם':         'היתר בתנאים',   # committee decision: approved with conditions
+    # בקשה להיתר
     'פתיחת בקשה':                  'בקשה להיתר',    # covers 'להיתר', 'היסטורית', plain
     'בקשה ללא היתר':               'בקשה להיתר',   # request processed but no permit issued
 }

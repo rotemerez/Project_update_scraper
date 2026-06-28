@@ -2,14 +2,14 @@
 Match scraped Complot permits against existing Madlan projects and produce a
 flagged report for manual review.
 
-Use cases:
-  UC1 - Project exists with status "טרום בקשה" and a permit was found for it.
-  UC2 - Project exists with a permit, and scraper found a newer status milestone.
-  UC3 - Match found, status unchanged -> skip (not in output).
-  UC4 - Scraped permit has no matching project -> flag as new project candidate.
+Row types in the output:
+  new_permit      - We track this project as pre-request; a real permit now exists for it.
+  status_advanced - We track this project with a permit; scraper found a newer milestone.
+  unchanged       - Match found, status not newer -> silently skipped (not in output).
+  untracked       - Permit exists in Complot but no matching project in Madlan at all.
 
 Output columns:
-  use_case | project_id | project_name | gush_helka | match_method
+  flag | project_id | project_name | gush_helka | match_method
   | db_status | scraped_status | scraped_status_date
   | request_number | request_date | full_address | request_type
   | project_description | requestor
@@ -81,12 +81,23 @@ def _is_upgrade(db_status_norm: str, scraped_status: str) -> bool:
     return scraped_rank > db_rank
 
 
+def _clean(val) -> str:
+    """Return val as a stripped string; NaN / None / the string 'nan' all become ''."""
+    if val is None:
+        return ''
+    if isinstance(val, float) and pd.isna(val):
+        return ''
+    s = str(val).strip()
+    return '' if s.lower() == 'nan' else s
+
+
 def _fmt_date(val) -> str:
-    if pd.isna(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return ''
     if hasattr(val, 'strftime'):
         return val.strftime('%Y-%m-%d')
-    return str(val).strip()
+    s = str(val).strip()
+    return '' if s.lower() == 'nan' else s
 
 
 def run(
@@ -147,19 +158,20 @@ def run(
             db_status_raw = str(proj.get('סטטוס פרויקט', '') or '').strip()
             db_status_norm = DB_STATUS_NORM.get(db_status_raw, '')
 
-            scraped_status = str(permit.get('permit_status', '') or '').strip()
-            scraped_date = str(permit.get('permit_status_date', '') or '').strip()
+            scraped_status = _clean(permit.get('permit_status', ''))
+            scraped_date = _clean(permit.get('permit_status_date', ''))
 
             # UC2: project already exists in Madlan — skip type filter (project is known relevant).
             # UC1: pre-request project, type filter still applied to avoid minor-work false positives
             #      BUT skip filter when request_type is empty (API doesn't provide it).
-            type_known = bool(str(permit.get('request_type', '') or '').strip())
-            type_relevant = _is_relevant_type(str(permit.get('request_type', '') or ''))
+            request_type = _clean(permit.get('request_type', ''))
+            type_known = bool(request_type)
+            type_relevant = _is_relevant_type(request_type)
 
             if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known):
-                # UC1: pre-request project, relevant permit now found
+                # pre-request project, relevant permit now found
                 report_rows.append(_make_row(
-                    use_case='UC1',
+                    flag='new_permit',
                     proj=proj,
                     permit=permit,
                     match_method=match_method,
@@ -169,9 +181,9 @@ def run(
                 ))
 
             elif _is_upgrade(db_status_norm, scraped_status):
-                # UC2: status advanced since last check
+                # project status advanced since last check
                 report_rows.append(_make_row(
-                    use_case='UC2',
+                    flag='status_advanced',
                     proj=proj,
                     permit=permit,
                     match_method=match_method,
@@ -179,16 +191,16 @@ def run(
                     scraped_status=scraped_status,
                     scraped_status_date=scraped_date,
                 ))
-            # else UC3: match found, no relevant change -> skip
+            # else unchanged: match found, nothing new -> skip
 
         else:
-            # UC4: no matching project found — only flag relevant permit types
-            if not _is_relevant_type(permit.get('request_type', '')):
+            # no matching project in Madlan — only flag relevant permit types
+            if not _is_relevant_type(_clean(permit.get('request_type', ''))):
                 continue
-            scraped_status = str(permit.get('permit_status', '') or '').strip()
-            scraped_date = str(permit.get('permit_status_date', '') or '').strip()
+            scraped_status = _clean(permit.get('permit_status', ''))
+            scraped_date = _clean(permit.get('permit_status_date', ''))
             report_rows.append(_make_row(
-                use_case='UC4',
+                flag='untracked',
                 proj=None,
                 permit=permit,
                 match_method='',
@@ -209,7 +221,7 @@ def run(
 
 
 def _make_row(
-    use_case: str,
+    flag: str,
     proj,
     permit: pd.Series,
     match_method: str,
@@ -218,7 +230,7 @@ def _make_row(
     scraped_status_date: str,
 ) -> dict:
     return {
-        'use_case':           use_case,
+        'flag':               flag,
         'project_id':         str(proj['מזהה פרויקט']) if proj is not None else '',
         'project_name':       str(proj['שם פרויקט']) if proj is not None else '',
         'project_gush_helka': str(proj['גוש-חלקה']) if proj is not None else '',
@@ -239,7 +251,7 @@ def _make_row(
 def _print_summary(df: pd.DataFrame):
     if df.empty:
         return
-    counts = df['use_case'].value_counts()
+    counts = df['flag'].value_counts()
     print('[Summary]')
-    for uc in ['UC1', 'UC2', 'UC4']:
-        print(f'  {uc}: {counts.get(uc, 0)}')
+    for flag in ['new_permit', 'status_advanced', 'untracked']:
+        print(f'  {flag}: {counts.get(flag, 0)}')

@@ -15,14 +15,11 @@ data must be transformed to match those fields before submission.
 ```
 /
 ├── CLAUDE.md                     ← this file
-├── docs/
-│   ├── NEXT_STEPS.md             ← live task tracker: done + what's next (READ THIS FIRST)
-│   ├── backoffice_fields.md      ← field reference from CMS guidelines doc
-│   ├── project_creation_norms.md ← data norms from מידענות נוהל הקמת פרויקטים
-│   ├── ROADMAP.md
-│   ├── DATA_FLOW.md
-│   ├── BUG_REFERENCE.md
-│   └── session_handoffs/         ← SESSION_HANDOFF_YYYY_MM_DD_X.md files
+├── requirements.txt              ← Python deps — stays at root (pip convention)
+├── .gitignore
+│
+├── scripts/                      ← runnable entry points (one per city/task)
+│   └── run_bat_yam.py            ← run from project root: python scripts/run_bat_yam.py
 │
 ├── scrapers/                     ← one module per municipality
 │   └── <city_name>/
@@ -30,15 +27,55 @@ data must be transformed to match those fields before submission.
 │       └── parser.py
 │
 ├── transform/                    ← raw scraped data → backoffice payload
+│   ├── matcher.py
+│   ├── gush_helka.py
+│   ├── address_match.py
 │   └── mapper.py
 │
 ├── backoffice/                   ← API client for backofficeng.madlan.co.il
 │   └── client.py
 │
 ├── tests/
-├── outputs/                      ← gitignored; raw JSON scrape results
-└── requirements.txt
+│
+├── docs/
+│   ├── NEXT_STEPS.md             ← live task tracker (READ THIS FIRST)
+│   ├── backoffice_fields.md
+│   ├── project_creation_norms.md
+│   ├── ROADMAP.md
+│   ├── DATA_FLOW.md
+│   ├── BUG_REFERENCE.md
+│   └── session_handoffs/         ← SESSION_HANDOFF_YYYY_MM_DD_X.md files
+│
+└── outputs/                      ← gitignored; all generated files go here
 ```
+
+---
+
+## File Placement Rules
+
+**Keep the root clean.** Only `CLAUDE.md`, `requirements.txt`, and `.gitignore` belong at root.
+Everything else goes in a named folder. When in doubt, use the rules below.
+
+| File type | Where it goes | Examples |
+|---|---|---|
+| Runner / entry-point scripts | `scripts/` | `run_bat_yam.py`, `run_haifa.py` |
+| Scraper modules | `scrapers/<city>/` | `scrapers/complot/api_scraper.py` |
+| Matching / transform logic | `transform/` | `matcher.py`, `gush_helka.py` |
+| Backoffice API client | `backoffice/` | `client.py` |
+| Tests | `tests/` | `test_matcher.py` |
+| Scrape outputs (Excel, JSON) | `outputs/` | `bat_yam_fresh.xlsx`, `bat_yam_report.xlsx` |
+| Debug HTML snapshots | `outputs/` | `debug_api_permit_list_b2025.html` |
+| Debug screenshots / PNGs | `outputs/` | `debug_download_*.png` |
+| Reference docs, field specs | `docs/` | `backoffice_fields.md` |
+| Session handoffs | `docs/session_handoffs/` | `SESSION_HANDOFF_2026_06_27_B.md` |
+| Madlan project exports | `docs/` | `bat_yam.xlsx` |
+
+**`repo/`** — gitignored reference copy of the prior `municipal-permit-scraper-main` codebase.
+Keep it, don't modify it, don't add to it.
+
+**Never create files at the root** other than the three listed above. If a script produces
+output files, it must write them to `outputs/`. If you are writing a one-off diagnostic or
+analysis script, put it in `scripts/`.
 
 ---
 

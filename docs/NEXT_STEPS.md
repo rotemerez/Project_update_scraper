@@ -52,26 +52,44 @@
   - Expanded to `b_params=range(2011, 2027)` — cycles 16 year-series, deduplicates by permit_num
 - **Full scrape completed**: 9,639 unique permits (2011–2026), saved to `outputs/bat_yam_fresh.xlsx`
 - Fixed `transform/matcher.py`:
-  - UC2 no longer blocked by empty `request_type` (project already exists in Madlan → relevant by definition)
-  - `NaN` coercion for `request_type` from Excel
-- **Matcher returns 0 rows** — gush-helka intersection appears to be empty; root cause not yet confirmed
+  - `status_advanced` no longer blocked by empty `request_type`
+  - Partial NaN coercion fix (BUG-001, not yet fully resolved)
+- **Matcher returned 0 rows** — root cause confirmed next session
+
+### Session F — 2026-06-27 (handoff B)
+- **Fixed BUG-001**: `float('nan') or ''` returns NaN not `''` — added `_clean()` helper,
+  replaced all NaN-unsafe coercions in `matcher.py` (see `docs/BUG_REFERENCE.md`)
+- Matcher now produces **414 `new_permit` rows** (was 0)
+- Renamed match flags: `UC1→new_permit`, `UC2→status_advanced`, `UC3→unchanged`, `UC4→untracked`
+  — output column is now `flag` instead of `use_case`
+- Diagnosed why 98% of permits have no `permit_status`: `GetTikFile` only covers active/recent
+  permits; most older ones have no event in `ארוע אחרון להצגה`, and many event types were unmapped
+- Expanded `EVENT_TO_STATUS` with 3 new mappings found in scrape log:
+  - `מסירת תעודת גמר` → `טופס 4`
+  - `מסירת היתר(בסמכות מהנדס)` → `היתר`
+  - `החלטה לאשר בתנאי/ם` → `היתר בתנאים`
+- Cleaned root folder: moved `run_bat_yam.py` → `scripts/`, `debug_download_*.png` → `outputs/`
+- Added file placement rules to `CLAUDE.md`
+- **Re-scrape triggered** with updated event mapping — running in background (~47 min)
 
 ---
 
 ## Immediate — Do First Next Session
 
-### 1. Debug matcher — find why 0 matches
-
-Run the diagnostic in `SESSION_HANDOFF_2026_06_27_A.md` to confirm:
-- How many projects have `גוש-חלקה` filled?
-- How many permits have `block_lot` non-empty?
-- What is the actual intersection size?
-
-Then fix whichever side is wrong (format mismatch, empty data, etc.) and re-run:
+### 1. Check re-scrape results and run matcher
+The re-scrape started during session F. Once `outputs/bat_yam_fresh.xlsx` is updated, run:
 ```python
 from transform import matcher
 matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'outputs/bat_yam_report.xlsx')
 ```
+Expected: same ~414 `new_permit` rows + some `status_advanced` rows now that 3 new event
+types are mapped. If `status_advanced` is still 0, investigate further.
+
+### 2. Review the report
+Open `outputs/bat_yam_report.xlsx` and spot-check a sample of `new_permit` rows:
+- Do the matched projects look right?
+- Are the addresses/gush-helka reasonable?
+- Any obvious false positives?
 
 ---
 
@@ -79,28 +97,37 @@ matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'out
 
 ### 3. Investigate automating the backoffice projects export
 Currently `docs/bat_yam.xlsx` is a manual export from the backoffice.  
-Check if the backoffice has a download API or script-accessible endpoint — if yes, automate the pull so the report always runs against fresh project data.
+Check if the backoffice has a download API or script-accessible endpoint — if yes, automate
+the pull so the report always runs against fresh project data.
 
 ### 4. Widen to a second city
-Once Bat Yam is validated end-to-end, pick a second city from `complot_cities.csv` and verify the scraper + matcher generalise cleanly (new city column in matcher, separate output file).
+Once Bat Yam is validated end-to-end, pick a second city from `complot_cities.csv` and verify
+the scraper + matcher generalise cleanly (new city column in matcher, separate output file).
+
+### 5. Build Bartech scraper
+Base it on the working Bartech scraper at `C:\R_PROJECTS\local_committee_scrapers` (not on
+`repo/municipal-permit-scraper-main/src/scrapers/bartech_scraper.py` which is a generic
+Playwright template that has never been tested against a real site).
 
 ---
 
 ## Later
 
-### 5. Resolve `שימור` substring noise
+### 6. Resolve `שימור` substring noise
 `שימור` is broad — it could match minor facade-preservation permits.  
 After seeing real Complot data, tighten to a more specific substring if noise appears.
 
-### 6. Complot event mapping — complete the table
-Once live scrapes have surfaced enough event types, finalise `EVENT_TO_STATUS` in the scraper and document the mapping in a comment block.
+### 7. Complot event mapping — finalise
+All distinct events from the 2011–2026 scrape have been catalogued (see session F handoff).
+Three new ones were added. Remaining unmapped events are intentionally left blank (admin/processing).
+No further action needed unless new event types surface in future scrapes.
 
-### 7. V2 — automatic backoffice writes
+### 8. V2 — automatic backoffice writes
 After the manual-review cycle is validated:
 - Build `backoffice/client.py` (API wrapper)
 - Build `transform/mapper.py` (scraped fields → backoffice payload)
-- Tie into matcher output for auto-update of UC2 projects
-- UC1 and UC4 still require human sign-off before creation
+- Tie into matcher output for auto-update of `status_advanced` projects
+- `new_permit` and `untracked` still require human sign-off before creation
 
 ---
 
@@ -109,7 +136,8 @@ After the manual-review cycle is validated:
 | Path | Role |
 |---|---|
 | `scrapers/complot/scraper.py` | Old Selenium scraper — superseded by API approach |
-| `scrapers/complot/api_scraper.py` | **To be created** — API-based, no Selenium |
+| `scrapers/complot/api_scraper.py` | API-based scraper — working |
+| `scripts/run_bat_yam.py` | Runner — uses `ComplotPermitsAPI`, `max_requests=None` |
 | `transform/matcher.py` | Matching + report — `RELEVANT_TYPE_SUBSTRINGS` list |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |
