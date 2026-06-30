@@ -22,7 +22,7 @@ permits = scraper.scrape()
 
 df = pd.DataFrame(permits)
 os.makedirs('outputs', exist_ok=True)
-df.to_excel('outputs/bat_yam_fresh.xlsx', index=False)
+df.to_csv('outputs/bat_yam_fresh.csv', index=False, encoding='utf-8-sig')
 
 print(f'\n--- Results ({len(df)} permits) ---')
 cols = ['request_number', 'permit_status', 'permit_status_date', 'request_type', 'scrape_status']

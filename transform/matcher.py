@@ -15,10 +15,23 @@ Output columns:
   | requestor
 """
 
+import re
+from datetime import datetime, timedelta
 import pandas as pd
 from typing import Optional, Dict, List
 from transform import gush_helka as gh
 from transform import address_match as am
+
+try:
+    from thefuzz import fuzz as _fuzz
+    _FUZZY_AVAILABLE = True
+except ImportError:
+    _FUZZY_AVAILABLE = False
+
+_BO_DEVELOPER_COL   = 'שם יזם/אדריכל/עו"ד'
+_BO_MIGRASH_COL     = 'תבע+מגרש'
+_FUZZY_THRESHOLD    = 80
+_NEW_REQUEST_CUTOFF = 365  # days: new_permit / untracked rows older than this are dropped
 
 # Permit categories (סוג הבקשה) that are not real permit requests and must be excluded.
 # Source: נוהל הקמת פרויקטים מאי 2023 — these types precede the official request submission
@@ -129,6 +142,142 @@ def _year_of(val) -> int:
     return 0
 
 
+def _is_recent(date_val, max_days: int = _NEW_REQUEST_CUTOFF) -> bool:
+    """True if date_val is within max_days of today, or if it cannot be parsed (keep unknown)."""
+    d = _parse_date(date_val)
+    if d is None:
+        return True
+    return (datetime.now() - d).days <= max_days
+
+
+def _parse_date(val) -> Optional['datetime']:
+    """Parse a date value (string, Timestamp, or date) into a datetime; returns None on failure."""
+    from datetime import datetime
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if hasattr(val, 'to_pydatetime'):
+        return val.to_pydatetime()
+    if hasattr(val, 'year'):
+        return datetime(val.year, val.month, val.day)
+    s = _clean(val)
+    if not s:
+        return None
+    for fmt in ('%d/%m/%Y', '%d.%m.%Y', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(s[:10], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _latest_project_date(proj: pd.Series) -> Optional['datetime']:
+    """Return the latest non-empty milestone date on a BO project row."""
+    latest = None
+    for col in STATUS_DATE_COLS.values():
+        d = _parse_date(proj.get(col))
+        if d is not None and (latest is None or d > latest):
+            latest = d
+    return latest
+
+
+def _scraped_date_is_actionable(permit: pd.Series, proj: pd.Series) -> bool:
+    """
+    True if the permit's status date is genuinely newer than the project's existing dates.
+
+    - Scraped date missing → keep (can't compare).
+    - Project has existing milestone dates → scraped date must be strictly after the latest.
+    - Project has no dates → scraped date must be within the last year (same cutoff as new_permit).
+    """
+    scraped_dt = _parse_date(permit.get('permit_status_date'))
+    if scraped_dt is None:
+        return True
+    latest_proj_dt = _latest_project_date(proj)
+    if latest_proj_dt is not None:
+        return scraped_dt > latest_proj_dt
+    return _is_recent(permit.get('permit_status_date'))
+
+
+def _dates_within(d1: Optional['datetime'], d2: Optional['datetime'], days: int = 4) -> bool:
+    """True if both dates are non-None and differ by at most `days` calendar days."""
+    if d1 is None or d2 is None:
+        return False
+    return abs((d1 - d2).days) <= days
+
+
+def _parse_migrash(val) -> str:
+    """Extract a bare migrash number from a 'תבע+מגרש' field value like 'נת/1234/מגרש 5' or '5'."""
+    s = _clean(val)
+    if not s:
+        return ''
+    m = re.search(r'מגרש\s*(\d+)', s)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r'\d+', s):
+        return s
+    return ''
+
+
+def _fuzzy_name_score(name1: str, name2: str) -> int:
+    """partial_ratio of two name strings; returns 0 if thefuzz is not installed."""
+    if not _FUZZY_AVAILABLE or not name1 or not name2:
+        return 0
+    return _fuzz.partial_ratio(name1, name2)
+
+
+def _pick_best_candidate(
+    candidates: List[int],
+    permit: pd.Series,
+    projects_df: pd.DataFrame,
+) -> int:
+    """
+    Given multiple BO project candidates sharing a Gush/Helka with this permit,
+    return the index of the best match using:
+      1. Migrash (if both sides have one and exactly one candidate matches)
+      2. Fuzzy developer name vs. requestor (highest score >= threshold)
+      3. First candidate (fallback)
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    permit_migrash = _clean(permit.get('migrash', ''))
+    if permit_migrash:
+        migrash_hits = [
+            idx for idx in candidates
+            if _parse_migrash(projects_df.loc[idx].get(_BO_MIGRASH_COL, '')) == permit_migrash
+        ]
+        if len(migrash_hits) == 1:
+            return migrash_hits[0]
+        if migrash_hits:
+            candidates = migrash_hits
+
+    # Step 2: Date anchor — match permit's request_date against BO's תאריך בקשה להיתר (±4 days)
+    # Runs before fuzzy name so an exact date match isn't overridden by identical developer names.
+    permit_date = _parse_date(permit.get('request_date'))
+    if permit_date:
+        date_hits = [
+            idx for idx in candidates
+            if _dates_within(permit_date, _parse_date(projects_df.loc[idx].get('תאריך בקשה להיתר')))
+        ]
+        if len(date_hits) == 1:
+            return date_hits[0]
+        if date_hits:
+            candidates = date_hits
+
+    # Step 3: Fuzzy developer name — fallback when date anchor can't narrow to one
+    requestor = _clean(permit.get('requestor', ''))
+    if requestor and _FUZZY_AVAILABLE:
+        best_idx, best_score = candidates[0], 0
+        for idx in candidates:
+            dev = _clean(projects_df.loc[idx].get(_BO_DEVELOPER_COL, ''))
+            score = _fuzzy_name_score(requestor, dev)
+            if score > best_score:
+                best_score, best_idx = score, idx
+        if best_score >= _FUZZY_THRESHOLD:
+            return best_idx
+
+    return candidates[0]
+
+
 def _compute_min_year(projects_df: pd.DataFrame) -> Optional[int]:
     """
     Return the year of the earliest permit request among in-progress projects
@@ -155,6 +304,7 @@ def run(
     output_path: str,
     min_year: Optional[int] = None,
     excluded_categories: Optional[set] = None,
+    matched_cache_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load projects and permits files, run matching, write flagged report to output_path.
@@ -165,12 +315,17 @@ def run(
               Defaults to EXCLUDED_REQUEST_CATEGORIES. Pass an empty set to disable.
               NOTE: in פתח תקווה and הרצליה, 'בקשה מקדמית' advances to a real permit
               without being closed and reopened -- do NOT exclude it for those cities.
+    matched_cache_path: if set, saves a JSON file listing every permit number that matched
+              a BO project (including unchanged). Used by the incremental runner.
     Returns the report DataFrame.
     """
     if excluded_categories is None:
         excluded_categories = EXCLUDED_REQUEST_CATEGORIES
     projects_df = pd.read_excel(projects_path)
-    permits_df = pd.read_excel(permits_path)
+    if permits_path.endswith('.csv'):
+        permits_df = pd.read_csv(permits_path, encoding='utf-8-sig')
+    else:
+        permits_df = pd.read_excel(permits_path)
 
     # Normalise column names (strip whitespace)
     projects_df.columns = [c.strip() for c in projects_df.columns]
@@ -198,17 +353,32 @@ def run(
             permits_df = permits_df[permits_df['first_event_date'].apply(_passes_year)]
             print(f'[INFO] min_year={min_year}: {before} -> {len(permits_df)} permits (first_event_date filter)')
 
-    # Excluded request categories (e.g. בקשה מקדמית)
-    if excluded_categories and 'request_category' in permits_df.columns:
+    # Excluded request categories — check both request_category (סוג הבקשה) and
+    # request_type (תיאור הבקשה) since some cities place the category value in either field.
+    if excluded_categories:
         before = len(permits_df)
-        permits_df = permits_df[~permits_df['request_category'].apply(
-            lambda v: _clean(v) in excluded_categories
-        )]
+        def _is_excluded(row):
+            return (
+                _clean(row.get('request_category', '')) in excluded_categories
+                or _clean(row.get('request_type', '')) in excluded_categories
+            )
+        permits_df = permits_df[~permits_df.apply(_is_excluded, axis=1)]
         excluded = before - len(permits_df)
         if excluded:
-            print(f'[INFO] Excluded {excluded} permits by request_category filter')
+            print(f'[INFO] Excluded {excluded} permits by request_category/type filter')
+
+    # Filter test permits (requestor marked as a test entry)
+    if 'requestor' in permits_df.columns:
+        before = len(permits_df)
+        permits_df = permits_df[~permits_df['requestor'].apply(
+            lambda v: 'ניסיון' in _clean(v)
+        )]
+        dropped = before - len(permits_df)
+        if dropped:
+            print(f'[INFO] Dropped {dropped} test permits (ניסיון requestor)')
 
     report_rows = []
+    matched_permit_numbers: List[str] = []  # all permits that matched a BO project
 
     # Build a gush-helka index over projects:
     # { (gush, helka) -> list of project row indices }
@@ -224,12 +394,15 @@ def run(
         matched_idx: Optional[int] = None
         match_method = ''
 
-        # 1. Gush-helka
+        # 1. Gush-helka — collect ALL candidates across all pairs, then pick best
+        gh_candidates: List[int] = []
         for pair in permit_gh_pairs:
-            if pair in gh_index:
-                matched_idx = gh_index[pair][0]
-                match_method = 'gush_helka'
-                break
+            for idx in gh_index.get(pair, []):
+                if idx not in gh_candidates:
+                    gh_candidates.append(idx)
+        if gh_candidates:
+            matched_idx = _pick_best_candidate(gh_candidates, permit, projects_df)
+            match_method = 'gush_helka'
 
         # 2. Address fallback
         if matched_idx is None:
@@ -241,6 +414,7 @@ def run(
 
         # --- Apply use-case logic ---
         if matched_idx is not None:
+            matched_permit_numbers.append(_clean(permit.get('request_number', '')))
             proj = projects_df.loc[matched_idx]
 
             db_status_raw = str(proj.get('סטטוס פרויקט', '') or '').strip()
@@ -252,7 +426,8 @@ def run(
             type_known     = bool(request_type)
             type_relevant  = _is_relevant_type(request_type)
 
-            if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known):
+            if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known) \
+                    and _is_recent(permit.get('request_date')):
                 report_rows.append(_make_row(
                     flag='new_permit',
                     proj=proj,
@@ -264,7 +439,10 @@ def run(
                     type_confirmed=type_known,
                 ))
 
-            elif _is_upgrade(db_status_norm, scraped_status):
+            elif _is_upgrade(db_status_norm, scraped_status) \
+                    and _scraped_date_is_actionable(permit, proj) \
+                    and (_is_relevant_type(_clean(permit.get('request_type', '')))
+                         or _is_relevant_type(_clean(permit.get('bakasha_description', '')))):
                 report_rows.append(_make_row(
                     flag='status_advanced',
                     proj=proj,
@@ -273,13 +451,16 @@ def run(
                     db_status=db_status_raw,
                     scraped_status=scraped_status,
                     scraped_status_date=scraped_date,
-                    type_confirmed=True,   # project already known relevant
+                    type_confirmed=True,
                 ))
             # else unchanged: match found, nothing new -> skip
 
         else:
             # No matching project -- only flag permits with a confirmed relevant type
+            # and filed within the last year (older untracked permits are not actionable)
             if not _is_relevant_type(_clean(permit.get('request_type', ''))):
+                continue
+            if not _is_recent(permit.get('request_date')):
                 continue
             scraped_status = _clean(permit.get('permit_status', ''))
             scraped_date   = _clean(permit.get('permit_status_date', ''))
@@ -302,6 +483,17 @@ def run(
         print('[OK] No flagged items found.')
 
     _print_summary(report_df)
+
+    if matched_cache_path and matched_permit_numbers:
+        import json, os
+        os.makedirs(os.path.dirname(matched_cache_path) or '.', exist_ok=True)
+        with open(matched_cache_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'city': city_hebrew,
+                'matched_permit_numbers': matched_permit_numbers,
+            }, f, ensure_ascii=False, indent=2)
+        print(f'[OK] Matched permit cache saved to {matched_cache_path} ({len(matched_permit_numbers)} permits)')
+
     return report_df
 
 
@@ -330,8 +522,9 @@ def _make_row(
         'request_date':       _fmt_date(permit.get('request_date')),
         'request_category':   _clean(permit.get('request_category', '')),
         'full_address':       str(permit.get('full_address', '')),
-        'request_type':       _clean(permit.get('request_type', '')),
-        'requestor':          _clean(permit.get('requestor', '')),
+        'request_type':        _clean(permit.get('request_type', '')),
+        'bakasha_description': _clean(permit.get('bakasha_description', '')),
+        'requestor':           _clean(permit.get('requestor', '')),
         'permit_block_lot':   _clean(permit.get('block_lot', '')),
     }
 

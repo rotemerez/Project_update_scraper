@@ -2,3 +2,5 @@ undetected-chromedriver
 selenium
 pandas
 openpyxl
+thefuzz
+python-Levenshtein

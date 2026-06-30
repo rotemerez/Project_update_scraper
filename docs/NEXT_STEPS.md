@@ -1,6 +1,6 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-06-28  
+**Last Updated:** 2026-06-30  
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot, expanding to additional cities
 
@@ -72,6 +72,53 @@
 - Added file placement rules to `CLAUDE.md`
 - **Re-scrape triggered** with updated event mapping — running in background (~47 min)
 
+### Session K — 2026-06-30 (handoff A)
+- **`_scraped_date_is_actionable()`** added to matcher: `status_advanced` now requires scraped
+  date to be strictly newer than the project's latest existing milestone date. If project has no
+  dates, falls back to 1-year recency cutoff. Result: Bat Yam `status_advanced` 72 → 2.
+- **`status_advanced` relevance filter**: now checks `_is_relevant_type()` on `request_type` OR
+  `bakasha_description` — minor single-apartment additions no longer match multi-unit projects.
+- **Scraped `מהות הבקשה`** (`bakasha_description`): added to Complot scraper and report output.
+- **Detail-page gush/helka** (BUG-008): `_parse_bakasha_file` now extracts `gush`+`helka` from
+  גושים וחלקות table; `_merge_permit` prefers this over the unreliable list-page value.
+- **Permit number regex** (extends BUG-007): post-processor strips appended national ID from
+  all extraction paths — `re.match(r'(20\d{6})', permit_num)`.
+- **Extended excluded_categories filter**: now checks `request_type` as well as `request_category`.
+- **Test permit filter**: matcher drops permits where `requestor` contains `ניסיון`.
+- **CSV output**: scraper runner scripts switched from `.xlsx` to `.csv`; matcher auto-detects.
+- **Bartech**: `שובץ לישיבת ועדה` → `בקשה להיתר` added to `STATUS_MAP`.
+- **~35 new `_UNMAPPED_EVENTS`**: מבנה מסוכן, בקשה למידע workflow, deposit/Rishuy Zamin, admin.
+- **Bat Yam final report**: 5 rows — 2 `status_advanced`, 1 `new_permit`, 2 `untracked`.
+- **`bat_yam_matched_cache.json`** bootstrapped (2,202 permits).
+
+### Session J — 2026-06-28 (handoff D)
+- **Read old PRD** (`docs/Scraper_project_updates.pdf`) — identified 4 applicable ideas
+- **Fixed first-match-wins bug** in GH index: matcher now collects ALL BO candidates sharing
+  a Gush/Helka, then calls `_pick_best_candidate()` to resolve ties
+- **Added `_pick_best_candidate()`** with 3-step disambiguation:
+  1. Migrash exact match (if both sides populated)
+  2. Date anchor: permit `request_date` vs BO `תאריך בקשה להיתר` (±4 days) — runs before
+     fuzzy name so identical developer names don't mask a date-based distinction
+  3. Fuzzy developer name: `thefuzz.partial_ratio(requestor, שם יזם/אדריכל/עו"ד) ≥ 80%`
+- **Added `migrash` + `applicant_name` to Complot scraper**: `_parse_bakasha_file` now also
+  parses the בעלי עניין table (מבקש row → `applicant_name`) and גושים וחלקות table
+  (מספר מגרש → `migrash`). `_merge_permit` prefers detail-page applicant over list-page requestor.
+- **Added 1-year cutoff** for `new_permit` and `untracked` flags — older than 365 days are
+  silently dropped (not actionable). `status_advanced` is unaffected.
+- **Added 7 events to `_UNMAPPED_EVENTS`**: 5 fee/admin events classified earlier + 2 new
+  (`הוסר מסדר היום`, `החזרת תיק מסריקה`). Two more surfaced in D scrape (see immediate tasks).
+- **Designed + implemented incremental scrape mode** (~10 min vs ~80 min full):
+  - `ComplotPermitsAPI.scrape_targeted(records)` — refreshes status for known permit numbers
+    without re-fetching the 9,600-row permit list
+  - `matcher.run(..., matched_cache_path=...)` — saves JSON of all matched permit numbers
+    (including unchanged) after each run; this is Phase A input for incremental
+  - `scripts/run_bat_yam_incremental.py` — Phase A (re-check ~600 matched permits) +
+    Phase B (scrape 2025-2026 only); runs matcher at end. ~10 min total.
+- **Added `thefuzz` + `python-Levenshtein`** to `requirements.txt`; installed
+- **Killed 4 duplicate Bat Yam processes**, restarted with updated code
+  Log: `outputs/scrape_log_2026_06_28_D.txt`, started ~15:46, expected completion ~17:05
+- **Holon scrape: COMPLETE** — `outputs/holon_fresh.xlsx` saved at 15:52 (1.9MB, 26,868 rows)
+
 ### Session I — 2026-06-28 (handoff C)
 - **Built Bartech scraper**: `scrapers/bartech/api_scraper.py` + `scripts/run_holon.py`
   - Smoke-tested against Holon; fixed two bugs found during test (see BUG-004, BUG-005)
@@ -127,54 +174,42 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Bat Yam re-scrape completing
-Re-scrape started ~15:04 (log: `outputs/scrape_log_2026_06_28_C.txt`). Once done, run matcher:
-```python
-from transform import matcher
-matcher.run('docs/bat_yam.xlsx', 'outputs/bat_yam_fresh.xlsx', 'בת ים', 'outputs/bat_yam_report.xlsx')
-```
+### 1. Test a second Complot city
 
-### 2. Holon scrape + matcher
-Holon scrape started ~12:55 (log: `outputs/holon_scrape_log_2026_06_28.txt`).
-Expected completion ~15:40. Once done:
-```python
-from transform import matcher
-matcher.run(
-    'docs/holon_28062026.xlsx',
-    'outputs/holon_fresh.xlsx',
-    'חולון',
-    'outputs/holon_report.xlsx',
-    excluded_categories=set(),   # Bartech excludes bad types at scrape time
-)
-```
+Pick a city from `complot_cities.csv`. Steps:
+1. Create `scripts/run_<city>.py` (copy `run_bat_yam.py`, update `site_id` + `city_name_hebrew`)
+2. Export that city's projects from backoffice → `docs/<city>_YYYYMMDD.xlsx`
+3. Run full scrape (no cache exists yet)
+4. Run matcher with `matched_cache_path`
+5. Review report — watch for new event types, address matching issues, permit number format
 
-### 3. Classify `שובץ לישיבת ועדה` Bartech status
-This status ("scheduled for committee meeting") appeared during the Holon scrape but was not
-mapped — user asked not to assume. Review against the backoffice norms and add to
-`STATUS_MAP` in `scrapers/bartech/api_scraper.py` once confirmed.
+Excluded categories: use default unless city is פתח תקווה or הרצליה.
 
-### 4. Review Bat Yam + Holon reports
-- `type_confirmed=True` rows: request_type values sensible?
-- `status_advanced` rows: correct upgrades?
-- Any new unmapped statuses in logs?
+### 2. Investigate Holon `status_advanced` inflation (1,675 rows)
+
+Bartech scraper does not populate `permit_status_date` → `_scraped_date_is_actionable` always
+returns True → no date filtering. 1,675 from 500 projects implies many multi-permit matches.
+- Check if Bartech detail page has a status date
+- If yes: add `permit_status_date` extraction to `scrapers/bartech/api_scraper.py`
+- If no: consider `תאריך פתיחה` (open date) as proxy
+
+### 3. Verify permit number format for other Complot cities
+
+The regex `r'(20\d{6})'` assumes 8-digit numbers starting with 20. Confirm before running
+other cities — if a city uses a different format the regex truncates incorrectly.
 
 ---
 
 ## Soon
 
-### 3. Investigate automating the backoffice projects export
-Currently `docs/bat_yam.xlsx` is a manual export from the backoffice.  
-Check if the backoffice has a download API or script-accessible endpoint — if yes, automate
-the pull so the report always runs against fresh project data.
+### 4. Investigate automating the backoffice projects export
+Currently `docs/bat_yam.xlsx` is a manual export. Check if the backoffice has a download
+API endpoint — if yes, automate so reports always run against fresh project data.
 
-### 4. Widen to a second city
-Once Bat Yam is validated end-to-end, pick a second city from `complot_cities.csv` and verify
-the scraper + matcher generalise cleanly (new city column in matcher, separate output file).
-
-### 5. Build Bartech scraper
-Base it on the working Bartech scraper at `C:\R_PROJECTS\local_committee_scrapers` (not on
-`repo/municipal-permit-scraper-main/src/scrapers/bartech_scraper.py` which is a generic
-Playwright template that has never been tested against a real site).
+### 5. Full rescrape of Bat Yam (quarterly)
+Current `bat_yam_fresh.csv` is from 2026-06-28 (scrape D). The `detail_block_lot` fix
+and permit number regex fix will only take effect in the next full scrape.
+Run quarterly to refresh the identity cache and pick up old permit ↔ new project linkages.
 
 ---
 
@@ -202,14 +237,19 @@ After the manual-review cycle is validated:
 
 | Path | Role |
 |---|---|
-| `scrapers/complot/scraper.py` | Old Selenium scraper — superseded by API approach |
-| `scrapers/complot/api_scraper.py` | Complot API scraper — working |
+| `scrapers/complot/api_scraper.py` | Complot API scraper — working; outputs `migrash` + `applicant_name` |
 | `scrapers/bartech/api_scraper.py` | Bartech API scraper — working, smoke-tested |
-| `scripts/run_bat_yam.py` | Runner — uses `ComplotPermitsAPI`, `max_requests=None` |
-| `scripts/run_holon.py` | Runner — Holon (Bartech), scrape in progress |
-| `transform/matcher.py` | Matching + report — `RELEVANT_TYPE_SUBSTRINGS` list |
+| `scripts/run_bat_yam.py` | Full scrape runner (~80 min) |
+| `scripts/run_bat_yam_incremental.py` | Incremental runner — Phase A + Phase B (~10 min) |
+| `scripts/run_holon.py` | Holon (Bartech) full scrape runner |
+| `transform/matcher.py` | Matching + report; `_pick_best_candidate()` for multi-project parcels |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |
 | `docs/bat_yam.xlsx` | Madlan projects export for Bat Yam (601 rows) |
-| `outputs/bat_yam_report.xlsx` | Latest report output |
+| `docs/holon_28062026.xlsx` | Madlan projects export for Holon (500 rows) |
+| `outputs/bat_yam_fresh.xlsx` | Latest full Bat Yam scrape — also serves as Phase A identity cache |
+| `outputs/holon_fresh.xlsx` | Latest Holon scrape (complete, 26,868 rows) |
+| `outputs/bat_yam_matched_cache.json` | Permit numbers matched to BO projects — Phase A input (generated by matcher) |
+| `outputs/bat_yam_report.xlsx` | Latest Bat Yam report |
+| `outputs/holon_report.xlsx` | Latest Holon report (not yet generated) |
 | `docs/session_handoffs/` | Per-session handoff notes |

@@ -1,13 +1,59 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-06-28
+**Last Updated:** 2026-06-30
+
+---
+
+## BUG-009 — `status_advanced` flagged stale statuses older than project's existing dates
+
+**Severity:** High — majority of `status_advanced` rows were false positives  
+**Fixed in:** Session K (2026-06-30, handoff A)  
+**File:** `transform/matcher.py` → `run()`
+
+### Root cause
+
+`_is_upgrade()` only compared status ranks (e.g. `בקשה להיתר` < `היתר`). It never checked
+whether the scraped `permit_status_date` was newer than the project's existing milestone dates.
+A permit with a 2011 `היתר` event would flag a project already holding a 2024 `תאריך היתר בתנאים`.
+
+### Fix
+
+Added `_latest_project_date()` (returns max of all non-empty BO milestone date columns) and
+`_scraped_date_is_actionable()`:
+- If scraped date missing → keep (can't compare)
+- If project has dates → scraped date must be strictly after the latest
+- If project has no dates → scraped date must be within 1 year
+
+`status_advanced` now requires both `_is_upgrade()` AND `_scraped_date_is_actionable()`.
+
+Result: Bat Yam `status_advanced` dropped from 72 to 2.
+
+---
+
+## BUG-008 — Complot list page returns wrong gush/helka for some permits
+
+**Severity:** High — permits matched to wrong projects  
+**Fixed in:** Session K (2026-06-30, handoff A)  
+**File:** `scrapers/complot/api_scraper.py` → `_parse_bakasha_file()`, `_merge_permit()`
+
+### Root cause
+
+`GetBakashotByNumber` (permit list page) returns the building file's parcel, not the
+individual permit's parcel. For example, permit 20160079 showed `7121-29` in the list
+but `7121-54` in its detail page. This caused the permit to match the wrong project.
+
+### Fix
+
+`_parse_bakasha_file` now extracts `gush` and `helka` from the גושים וחלקות table on
+the detail page and returns `detail_block_lot`. `_merge_permit` uses this value
+preferentially, falling back to the list-page `block_lot` only if the detail page has none.
 
 ---
 
 ## BUG-007 — Complot list parser concatenates request number + rishuy zamin number
 
 **Severity:** High — affected permits had no detail data; appeared as `scrape_status=success` with all NaN fields  
-**Fixed in:** Session I (2026-06-28, handoff C)  
+**Fixed in:** Session I (2026-06-28, handoff C) — partial; completed Session K (2026-06-30, handoff A)  
 **File:** `scrapers/complot/api_scraper.py` → `_parse_permit_list()`
 
 ### Root cause
@@ -33,9 +79,23 @@ cells[0].get_text(strip=True)
 next(cells[0].stripped_strings, '')  # takes only the first text node
 ```
 
+### Complete fix (Session K)
+
+The session I fix only covered the fallback path. The primary `row_data` column lookup
+(e.g. `row_data.get('מספר בקשה(רישוי זמין)')`) could still return the full concatenated value
+if the column header existed in the page. Added a regex post-processor applied after all paths:
+
+```python
+_m = re.match(r'(20\d{6})', str(permit_num).strip())
+if _m:
+    permit_num = _m.group(1)
+```
+
+Local permit number format is `YYYY####` (8 digits starting with `20`). Verify for other cities.
+
 ### How to spot
 
-Permit number in `bat_yam_fresh.xlsx` is 18+ digits and starts with a plausible 8-digit number.
+Permit number in `bat_yam_fresh.csv` is 18+ digits and starts with a plausible 8-digit number.
 Corresponding `request_type` and `permit_status` are NaN despite `scrape_status=success`.
 
 ---

@@ -14,6 +14,7 @@ Output schema:
 """
 
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -70,6 +71,65 @@ _UNMAPPED_EVENTS = {
     'אישור שכנים',
     'פרסום הבקשה',
     'העברה ליחידה אחרת',
+    # fee/admin processing steps
+    'מסירת היתר',
+    'הכנת היתר טיוטא לחתימות בלבד',
+    'תשלום אגרת בניה',
+    'חישוב אגרת בניה',
+    'אישור העברת בקשה לחישובי אגרות',
+    # scheduling/scanning admin
+    'הוסר מסדר היום',
+    'החזרת תיק מסריקה',
+    # form 2 / betterment levy admin
+    'הפקת טופס 2',
+    'בדיקת שמאי פנימי להיטל השבחה',
+    # licensing authority / inspector / committee admin
+    'הדפסת מכתבי החלטה',
+    'מיועד לישיבת רשות רישוי',
+    'המתנה לבדיקת מפקח',
+    'הבקשה מתאימה למציאות',
+    'הבקשה לא מתאימה למציאות',
+    'בדיקת מפקח לבקשה להיתר',
+    'ביטול היתר',
+    'תשלום אגרת תאגיד',
+    'חישוב אגרת תאגיד',
+    'ישיבת מליאת הועדה',
+    'ישיבת ועדת משנה',
+    'ישיבת רשות רישוי',
+    'החלטה לאשר',
+    'בקשה עברה לשלב בקרת תכן',
+    'בקשה הועברה לבקרה מרחבית (45 יום)',
+    'השלמת תנאי סף בקשה להיתר - מחלקת מידע',
+    # בקשה למידע workflow events (information requests -- not trackable permit milestones)
+    'ביטול בקשה למידע',
+    'קבלת נתונים מרישוי זמין',
+    'העברת תיק המידע למערכת רישוי זמין',
+    'העברת תיק מידע לאישור',
+    'הכנת טיוטא תיק מידע',
+    'השלמת בקשה למידע להתייחסות אסטרטגיה',
+    'העברת בקשה למידע להתייחסות מח\' אסטרטגיה',
+    'השלמת התייחסות מחלקת רישוי - חלופת שקד',
+    'העברה להתייחסות מחלקת רישוי - חלופת שקד',
+    'העברת בקשה למידען',
+    'דחיית בקשה למידע - אי עמידה בתנאי סף',
+    'קבלת התייחסות למידע היחידה לקיימות ואיכות הסביבה ובנייה ירוקה',
+    # deposit / Rishuy Zamin intake admin
+    'תשלום פיקדון',
+    'הפקת פקדון לתשלום',
+    'עודכנו פרטי לקוח ונכס / נמסר פיקדון לתשלום',
+    'קליטת בקשה מרישוי זמין(1)',
+    'קליטת בקשה מרישוי זמין(2)',
+    'קליטת בקשה מרישוי זמין(3)',
+    'דחיית בקשה בתנאי סף - מח\' מידע (1)',
+    'דחיית בקשה בתנאי סף - מח\' מידע(2)',
+    'דחיית בקשה בתנאי סף - מח\' מידע(3)',
+    'הבקשה נסגרה ברישוי זמין בגרסה שניה על העורך לפתוח בקשה חדשה ברישוי זמין',
+    # dangerous-building declaration events (separate municipal process, not a permit milestone)
+    'פתיחת תיק מבנה מסוכן',
+    'תאריך פניה לבדיקת מבנה מסוכן',
+    'תאריך סיור מהנדס הכרזה מבנה מסוכן',
+    'המבנה מוכרז כמבנה מסוכן',
+    'תאריך שליחת חו"ד מסוכנות לבעלי הנכס',
 }
 
 STATUS_ORDER = ['בקשה להיתר', 'היתר בתנאים', 'היתר', 'טופס 4']
@@ -247,10 +307,15 @@ class ComplotPermitsAPI:
                 row_data.get('מספר בקשה(רישוי זמין)') or
                 row_data.get('מספר בקשה') or
                 row_data.get("מס' בקשה") or
-                next(cells[0].stripped_strings, '')  # avoids concatenating rishuy-zamin number
+                next(cells[0].stripped_strings, '')
             )
             if not permit_num:
                 continue
+            # Local permit number is YYYY#### (8 digits starting with 20YY).
+            # The list page sometimes appends the national רישוי זמין ID — strip it.
+            _m = re.match(r'(20\d{6})', str(permit_num).strip())
+            if _m:
+                permit_num = _m.group(1)
 
             gush  = row_data.get('גוש',  '').strip()
             helka = row_data.get('חלקה', '').strip()
@@ -269,15 +334,19 @@ class ComplotPermitsAPI:
     def _parse_bakasha_file(self, html: str) -> Dict:
         """
         Extract from permit detail page:
-          request_type     - תיאור הבקשה (construction description, e.g. 'תמ"א 38- הריסה ובנייה')
-          request_category - סוג הבקשה   (permit category, e.g. 'בקשה מקדמית', 'היתר בניה')
-          event            - most recent mappable event description from events table
-          event_date       - date of that event
+          request_type         - תיאור הבקשה (construction description)
+          request_category     - סוג הבקשה   (permit category)
+          bakasha_description  - מהות הבקשה  (free-text nature of request)
+          event                - most recent mappable event description
+          event_date           - date of that event
+          applicant_name       - מבקש row from בעלי עניין table
+          migrash              - מספר מגרש from גושים וחלקות table
         """
         soup = BeautifulSoup(html, 'html.parser')
 
-        request_type     = _extract_field(soup, 'תיאור הבקשה')
-        request_category = _extract_field(soup, 'סוג הבקשה')
+        request_type        = _extract_field(soup, 'תיאור הבקשה')
+        request_category    = _extract_field(soup, 'סוג הבקשה')
+        bakasha_description = _extract_field(soup, 'מהות הבקשה')
 
         # Events table: find by 'תיאור אירוע' header
         event_table = _find_table_with_header(soup, 'תיאור אירוע')
@@ -306,7 +375,6 @@ class ComplotPermitsAPI:
                 event_desc = _cell(desc_col)
                 event_date = _cell(date_col)
 
-                # Track earliest event date across all rows
                 if event_date:
                     if not first_event_date or _earlier_date(event_date, first_event_date):
                         first_event_date = event_date
@@ -321,12 +389,59 @@ class ComplotPermitsAPI:
                 if event_desc and event_desc not in _UNMAPPED_EVENTS and not status:
                     _log(f'  [NEW EVENT] Unmapped: [{event_desc}]')
 
+        # Applicant: find מבקש row in בעלי עניין table
+        applicant_name = ''
+        stakeholder_table = _find_table_with_header(soup, 'סוג בעל עניין')
+        if stakeholder_table:
+            sh_headers = _extract_headers(stakeholder_table)
+            type_col = _find_col(sh_headers, ['סוג בעל עניין'])
+            name_col = _find_col(sh_headers, ['שם בעל עניין'])
+            if type_col and name_col:
+                type_idx = sh_headers.index(type_col)
+                name_idx = sh_headers.index(name_col)
+                for row in stakeholder_table.select('tbody tr'):
+                    cells = row.find_all('td')
+                    if len(cells) > max(type_idx, name_idx):
+                        role = cells[type_idx].get_text(strip=True)
+                        if 'מבקש' in role:
+                            applicant_name = cells[name_idx].get_text(strip=True)
+                            break
+
+        # Gush / helka / migrash: from גושים וחלקות table
+        # The detail page is authoritative — the list page sometimes returns the wrong parcel.
+        migrash = ''
+        detail_block_lot = ''
+        parcel_table = _find_table_with_header(soup, 'מספר גוש')
+        if parcel_table:
+            p_headers = _extract_headers(parcel_table)
+            gush_col    = _find_col(p_headers, ['מספר גוש'])
+            helka_col   = _find_col(p_headers, ['מספר חלקה'])
+            migrash_col = _find_col(p_headers, ['מספר מגרש'])
+            gush_idx    = p_headers.index(gush_col)    if gush_col    else None
+            helka_idx   = p_headers.index(helka_col)   if helka_col   else None
+            migrash_idx = p_headers.index(migrash_col) if migrash_col else None
+            for row in parcel_table.select('tbody tr'):
+                cells = row.find_all('td')
+                if migrash_idx is not None and len(cells) > migrash_idx:
+                    migrash = cells[migrash_idx].get_text(strip=True)
+                if gush_idx is not None and helka_idx is not None \
+                        and len(cells) > max(gush_idx, helka_idx):
+                    gush  = cells[gush_idx].get_text(strip=True)
+                    helka = cells[helka_idx].get_text(strip=True)
+                    if gush and helka:
+                        detail_block_lot = f'{gush}-{helka}'
+                break  # take first parcel row
+
         return {
-            'request_type':     request_type,
-            'request_category': request_category,
-            'event':            best_event,
-            'event_date':       best_event_date,
-            'first_event_date': first_event_date,
+            'request_type':        request_type,
+            'request_category':    request_category,
+            'bakasha_description': bakasha_description,
+            'event':               best_event,
+            'event_date':          best_event_date,
+            'first_event_date':    first_event_date,
+            'applicant_name':      applicant_name,
+            'migrash':             migrash,
+            'detail_block_lot':    detail_block_lot,
         }
 
     # ------------------------------------------------------------------
@@ -336,21 +451,77 @@ class ComplotPermitsAPI:
     def _merge_permit(self, raw: Dict, detail: Dict) -> Dict:
         permit_status = _map_event(detail.get('event', ''))
         scrape_status = 'success' if raw.get('permit_num') and raw.get('address') else 'partial'
+        # Prefer applicant_name from detail page (structured role table) over list-page requestor
+        requestor = detail.get('applicant_name') or raw.get('requestor', '')
 
         return {
             'request_number':      raw['permit_num'],
             'request_date':        raw.get('request_date', ''),
             'full_address':        raw.get('address', ''),
             'city':                self.city_name,
-            'block_lot':           raw.get('block_lot', ''),
+            'block_lot':           detail.get('detail_block_lot') or raw.get('block_lot', ''),
+            'migrash':             detail.get('migrash', ''),
             'request_type':        detail.get('request_type', ''),
             'request_category':    detail.get('request_category', ''),
-            'requestor':           raw.get('requestor', ''),
+            'bakasha_description': detail.get('bakasha_description', ''),
+            'requestor':           requestor,
             'permit_status':       permit_status,
             'permit_status_date':  detail.get('event_date', ''),
             'first_event_date':    detail.get('first_event_date', ''),
             'scrape_status':       scrape_status,
         }
+
+    # ------------------------------------------------------------------
+    # Targeted refresh (incremental mode)
+    # ------------------------------------------------------------------
+
+    def scrape_targeted(self, permit_records: List[Dict]) -> List[Dict]:
+        """
+        Refresh detail-page fields for a known list of permits without re-fetching
+        the permit list. Identity fields (address, block_lot, request_date, city)
+        are preserved from the input records; status/events are refreshed via
+        GetBakashaFile.
+
+        Used by the incremental runner for Phase A (re-checking matched permits).
+        """
+        if self.max_requests:
+            permit_records = permit_records[:self.max_requests]
+        _log(f'[targeted] Refreshing {len(permit_records)} permits via GetBakashaFile...')
+        results = []
+        for i, record in enumerate(permit_records):
+            permit_num = str(record.get('request_number', '')).strip()
+            if not permit_num:
+                continue
+            _log(f'  [{i+1}/{len(permit_records)}] GetBakashaFile {permit_num}')
+            try:
+                detail = self._get_bakasha_file(permit_num)
+            except Exception as e:
+                _log(f'  [WARN] {permit_num}: {e} -- keeping cached status')
+                # Preserve last-known status so the permit still appears in matcher
+                detail = {
+                    'request_type':        record.get('request_type', ''),
+                    'request_category':    record.get('request_category', ''),
+                    'bakasha_description': record.get('bakasha_description', ''),
+                    'applicant_name':      record.get('requestor', ''),
+                    'migrash':             record.get('migrash', ''),
+                    'detail_block_lot':    record.get('block_lot', ''),
+                    'event':               record.get('permit_status', ''),
+                    'event_date':          record.get('permit_status_date', ''),
+                    'first_event_date':    record.get('first_event_date', ''),
+                }
+            results.append(self._merge_permit(
+                {
+                    'permit_num':   permit_num,
+                    'request_date': record.get('request_date', ''),
+                    'address':      record.get('full_address', ''),
+                    'block_lot':    record.get('block_lot', ''),
+                    'requestor':    record.get('requestor', ''),
+                },
+                detail,
+            ))
+            time.sleep(0.5)
+        _log(f'[targeted] Done. {len(results)} permits refreshed.')
+        return results
 
     # ------------------------------------------------------------------
     # Year filter
