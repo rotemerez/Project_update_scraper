@@ -418,6 +418,24 @@ def run(
             proj = projects_df.loc[matched_idx]
 
             db_status_raw = str(proj.get('סטטוס פרויקט', '') or '').strip()
+
+            # Finished projects: minor alterations are irrelevant. Genuine new construction
+            # (a new project on the same parcel) surfaces as untracked so a new BO entry
+            # can be created; everything else is silently dropped.
+            if db_status_raw == 'הסתיים':
+                if (_is_relevant_type(_clean(permit.get('request_type', '')))
+                        or _is_relevant_type(_clean(permit.get('bakasha_description', '')))):
+                    if _is_recent(permit.get('request_date')):
+                        scraped_status = _clean(permit.get('permit_status', ''))
+                        scraped_date   = _clean(permit.get('permit_status_date', ''))
+                        report_rows.append(_make_row(
+                            flag='untracked',
+                            proj=None, permit=permit, match_method='',
+                            db_status='', scraped_status=scraped_status,
+                            scraped_status_date=scraped_date, type_confirmed=True,
+                        ))
+                continue
+
             db_status_norm = DB_STATUS_NORM.get(db_status_raw, '')
 
             scraped_status = _clean(permit.get('permit_status', ''))

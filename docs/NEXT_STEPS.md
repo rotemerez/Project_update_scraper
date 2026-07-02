@@ -1,12 +1,26 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-06-30  
+**Last Updated:** 2026-07-02 (Session R)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot, expanding to additional cities
+**Scope:** Bat Yam + Ramat Gan via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot
 
 ---
 
 ## Done
+
+### Session R — 2026-07-02 (handoff E)
+- **Applied all reviewer annotations** from screenshots to both scrapers:
+  - `scrapers/complot/api_scraper.py` — `EVENT_TO_STATUS` expanded from 11 → 29 entries;
+    `_UNMAPPED_EVENTS` restructured: 9 entries moved to `EVENT_TO_STATUS`, 7 new entries added
+    (`בקשה ללא היתר`, `היתר היסטורי`, `ישיבת מליאה`, `גמר פרסום`, `הוגשה תכנית מתוקנת`,
+    `הפקת אגרות והיטלים`, `שיבוץ בקשה לדיון / למאגר`)
+  - `scrapers/bartech/api_scraper.py` — `STATUS_MAP` expanded to 40 entries (incl. construction
+    stages, טופס 4 variants, committee steps); `_KNOWN_CLOSED` shrunk (removed `החלטה לדחות`,
+    now maps to `בקשה להיתר`); `STAGE_TO_STATUS` expanded to 21 entries (גמר בניה demoted from
+    `טופס 4` → `היתר`; הפקת/הוצא/הוצאת היתר demoted from `היתר` → `היתר בתנאים`; 7 entries
+    moved from `_UNMAPPED_STAGES`); 7 new `_UNMAPPED_STAGES` entries added
+- **Annotation artifact export fixed**: `execCommand` + modal fallback deployed to same URL
+  — reviewer's localStorage preserved; 3 pending decisions still awaited
 
 ### Session A — 2026-06-25
 - Project scaffolding: all folders, `CLAUDE.md`, `requirements.txt`
@@ -71,6 +85,100 @@
 - Cleaned root folder: moved `run_bat_yam.py` → `scripts/`, `debug_download_*.png` → `outputs/`
 - Added file placement rules to `CLAUDE.md`
 - **Re-scrape triggered** with updated event mapping — running in background (~47 min)
+
+### Session Q — 2026-07-02 (handoff D)
+- **Holon re-matcher result confirmed**: same 197 rows (194 `status_advanced`, 3 `untracked`) as the
+  pre-fix run — the `הסתיים` guard did not affect Holon because none of those 194 projects had that status.
+- **Interactive annotation artifact built**:
+  - URL: https://claude.ai/code/artifact/b8043df2-083a-46cd-9ca0-05776418ed69
+  - All status strings for Complot, Bartech list, Bartech detail — one dropdown per string
+  - All dropdowns start blank (`— בחר —`); reviewer selects the correct milestone
+  - localStorage persistence, "Show unset only" filter, Export JSON button
+  - Sent to the person who does this manually for annotation
+- **`דיון בועדת ערר`** identified as a companion unmapped Complot event (Kiryat Ata log).
+  Not yet added to the artifact — needs to be added next session.
+- **Example permit for ועדת ערר events**: `20110030` in Kiryat Ata (Complot site_id=32).
+  The actual Complot detail page should be reviewed to understand whether the appeal outcome
+  indicates an actionable milestone before classifying.
+- **Krayot scrape**: was at 6000/9037 at last check (~66%). Status unknown at session end.
+
+### Session P — 2026-07-02 (handoff C)
+- **Holon matcher (first run)**: 197 rows — 0 `new_permit`, 194 `status_advanced`, 3 `untracked`.
+  Cache: `outputs/holon_matched_cache.json` (2,487 permits).
+  Note: first run was pre-fix; second run (with הסתיים fix) still running.
+- **Matcher fix — `הסתיים` projects** (`transform/matcher.py`):
+  Projects with `סטטוס פרויקט = הסתיים` now skip all minor-alteration permits;
+  genuine new construction (relevant type + recent) surfaces as `untracked` for a new BO entry.
+  Root cause: `הסתיים` was not in `DB_STATUS_NORM`, so `_is_upgrade('', X)` was always True.
+- **Bartech STATUS_MAP**: added `ישיבה` → `בקשה להיתר` and `בדיקה גליון דרישות` → `בקשה להיתר`
+  (both appeared as `[NEW STATUS]` in Krayot list-page log).
+- **Bartech STAGE_TO_STATUS**: added `'טופס 4'` → `'טופס 4'` (seen as `[NEW STAGE]` in Krayot detail phase).
+- **Bartech `_UNMAPPED_STAGES`**: added `ישיבת ועדת משנה לתכנון` (Krayot detail phase).
+- **Krayot scrape**: entered detail phase ~14:00 2026-07-02. Still running.
+- **Status reference artifact** compiled: all status/event strings per scraper with current
+  mapping. Awaiting user annotation (ignore/flag decisions) for NEW Krayot and Ramat Gan entries.
+
+### Session O — 2026-07-02 (handoff B)
+- **Kiryat Ata scrape complete**: `outputs/kiryat_ata_fresh.csv`, 3,318 permits.
+  Note: scrape started before `הוצאת היתר בניה` → `היתר` fix was applied; some `היתר`
+  statuses are missing from the output (running process used old in-memory code).
+- **Kiryat Ata matcher**: 55 rows — 14 `status_advanced`, 41 `untracked`, 0 `new_permit`.
+  Cache: `outputs/kiryat_ata_matched_cache.json` (704 permits).
+- **41 new Complot `_UNMAPPED_EVENTS`** added from Kiryat Ata log (admin/routing events).
+- **Krayot scrape started**: `scripts/run_krayot.py`, `base_url=https://www.vkrayot.co.il`,
+  `min_year=2009` (auto-computed from `docs/krayot_projects_30062026.xlsx`).
+  Estimated completion: 4-6 hours. Type 51: 4,944 pages.
+- **Bartech scraper improved**:
+  - `min_year` now filters at LIST phase (not just detail phase) — old permits skipped entirely
+  - `min_year` auto-computed from projects file in runner scripts (never hardcoded)
+  - New STATUS_MAP entries: `היתר`, `היתר/תחילת עבודות`, `היתר/טופס 4`, `הגשה`,
+    `עמידה בתנאים מוקדמים`, `אי עמידה בתנאים מוקדמים`, `קבלת תוכנית מתוקנת`,
+    `תשלום פקדון`, `הפקת אגרה`, `החלטה לאשר`, `אי עמידה בתנאים מוקדמים לצורך פרסום`
+  - New STAGE_TO_STATUS entries: `הוצאת היתר בניה` → `היתר`, `הפקת אישור לתחילת עבודות` → `היתר`,
+    `החלטה לאשר` → `היתר בתנאים` (shortens existing key to catch both forms)
+  - `_KNOWN_CLOSED`: added `החלטה לדחות`
+  - 20 new Krayot-specific `_UNMAPPED_STAGES` added (Rishuy Zamin + committee workflow)
+  - `run_holon.py` updated to auto-compute min_year
+- **`scripts/run_krayot.py`** created.
+
+### Session N — 2026-07-02 (handoff A)
+- **Complot IP block** (triggered by Ramat Gan scrape) confirmed and resolved from office IP.
+  Ramat Gan restriction was the block, not city policy — re-scrape needed from office.
+- **Kiryat Ata scrape** started: `scripts/run_kiryat_ata.py`, site_id=32, 3,318 permits,
+  detail phase running (expected completion ~08:00 2026-07-02).
+- **Holon re-scrape complete**: `outputs/holon_fresh.csv`, 21,039 rows.
+- **EVENT_TO_STATUS** updated: `הוצאת היתר בניה` → `היתר`.
+- **14 new `_UNMAPPED_EVENTS`** added (Kiryat Ata admin events + `החלטת ועדת ערר`).
+- **Bartech `_UNMAPPED_STAGES`** updated: `אישור לת. גמר, פיקוח בניה` added.
+
+### Session M — 2026-06-30 (handoff C)
+- **Complot IP block diagnosed**: the Ramat Gan scrape (4,916 GetBakashaFile calls) triggered
+  an IP-level block on handasi.complot.co.il that affects ALL Complot cities globally —
+  including the web frontend. Ramat Gan's "restriction" was the block, not a city policy.
+  All Complot cities need to be run/tested from the office IP.
+- **Ramat Gan scrape is stale**: `outputs/ramat_gan_fresh.csv` was scraped while blocked —
+  detail fields empty. Re-scrape from office IP needed before running the matcher.
+- **Kiryat Ata** (Complot, site_id=32) selected as next city: `scripts/run_kiryat_ata.py` created.
+  Projects file: `docs/Kiryat_Ata_Projects_30062026.xlsx`.
+- **Holon re-scrape** started 2026-06-30 ~17:00 (running); new unmapped Bartech stage
+  `אישור לת. גמר, פיקוח בניה` added to `_UNMAPPED_STAGES`.
+
+### Session L — 2026-06-30 (handoff B)
+- **Ramat Gan scraper**: `scripts/run_ramat_gan.py` created (`site_id=3`, city_name_hebrew=`רמת גן`)
+  — full scrape ran, 4,916 unique permits. Complot site_ids documented in Claude memory
+  (`local_committee_scrapers/registry/dispatcher.py` is the canonical source).
+- **Bartech scraper rebuilt** — two-phase, same design as Complot:
+  - Phase 2: `PermitApplicationDetails` fetched per permit; ALL stages tables parsed
+    (`שלבי הבקשה: מסלול רישוי בניה` + `שלבי בניה` + any other tracks)
+  - `STAGE_TO_STATUS` priority ranking (mirrors Complot `EVENT_TO_STATUS`) — highest-ranked
+    status across all stages wins, not just the most recent row
+  - Detail page also yields `request_type` (תאור הבקשה), `bakasha_description` (מהות הבקשה),
+    and accurate `block_lot` (gush/helka from detail overrides list-page value)
+  - `permit_status_date` now populated → `_scraped_date_is_actionable` will fire for Holon
+  - Added `min_year` parameter: skips detail fetch for pre-`min_year` permits (keeps them in
+    output for the matcher's own filter). Holon data goes back to 1944 — `min_year=2011`
+    reduces detail fetches from 26,869 → ~8,739 (saves ~60 min).
+- **`run_holon.py`** updated with `min_year=2011` and `bakasha_description` in output cols.
 
 ### Session K — 2026-06-30 (handoff A)
 - **`_scraped_date_is_actionable()`** added to matcher: `status_advanced` now requires scraped
@@ -174,29 +282,73 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Test a second Complot city
+### 1. Apply 3 remaining annotation decisions (when received)
 
-Pick a city from `complot_cities.csv`. Steps:
-1. Create `scripts/run_<city>.py` (copy `run_bat_yam.py`, update `site_id` + `city_name_hebrew`)
-2. Export that city's projects from backoffice → `docs/<city>_YYYYMMDD.xlsx`
-3. Run full scrape (no cache exists yet)
-4. Run matcher with `matched_cache_path`
-5. Review report — watch for new event types, address matching issues, permit number format
+3 decisions from the reviewer are still pending — user will update when received.
+Apply them to `scrapers/complot/api_scraper.py` and/or `scrapers/bartech/api_scraper.py`
+using the same `EVENT_TO_STATUS` / `STAGE_TO_STATUS` pattern.
 
-Excluded categories: use default unless city is פתח תקווה or הרצליה.
+The annotation artifact (same URL, reviewer's selections preserved):
+https://claude.ai/code/artifact/b8043df2-083a-46cd-9ca0-05776418ed69
 
-### 2. Investigate Holon `status_advanced` inflation (1,675 rows)
+Other unset items still in the artifact (can apply whenever answers arrive):
+- Complot: `הוצאת היתר בניה`, `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`, `עיכוב היתר ע"י ועדת ערר`
+- Bartech list: `ביטול היתר`, `שחרור ערבות ע"י מפקח/ת`
+- Bartech detail: several not captured in screenshots
 
-Bartech scraper does not populate `permit_status_date` → `_scraped_date_is_actionable` always
-returns True → no date filtering. 1,675 from 500 projects implies many multi-permit matches.
-- Check if Bartech detail page has a status date
-- If yes: add `permit_status_date` extraction to `scrapers/bartech/api_scraper.py`
-- If no: consider `תאריך פתיחה` (open date) as proxy
+### 2. Check Krayot scrape status and run matcher
 
-### 3. Verify permit number format for other Complot cities
+```powershell
+Get-Content 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_krayot.txt' -Tail 5
+```
 
-The regex `r'(20\d{6})'` assumes 8-digit numbers starting with 20. Confirm before running
-other cities — if a city uses a different format the regex truncates incorrectly.
+If done (`[DONE]` marker), check for any new `[NEW STATUS]` or `[NEW STAGE]` lines not yet in
+the code, then run the matcher:
+
+```python
+from transform.matcher import run as matcher_run
+matcher_run(
+    'docs/krayot_projects_30062026.xlsx',
+    'outputs/krayot_fresh.csv',
+    'קריות',
+    'outputs/krayot_report.xlsx',
+    matched_cache_path='outputs/krayot_matched_cache.json',
+)
+```
+
+### 3. Re-scrape Ramat Gan (from office IP)
+
+The existing `outputs/ramat_gan_fresh.csv` was scraped while the IP was blocked — all detail
+fields are empty. Need a clean re-scrape from the office to get `request_type`, `request_category`,
+`permit_status`. Then run the matcher.
+
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
+Start-Process -FilePath 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' `
+  -ArgumentList '-u', 'c:\R_PROJECTS\Project_update_scraper\scripts\run_ramat_gan.py' `
+  -WorkingDirectory 'c:\R_PROJECTS\Project_update_scraper' `
+  -RedirectStandardOutput 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_ramat_gan_B.txt' `
+  -RedirectStandardError  'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_err_ramat_gan_B.txt' `
+  -NoNewWindow
+```
+
+After scrape, run matcher:
+```python
+from transform.matcher import run as matcher_run
+matcher_run(
+    'docs/Ramat_Gan_Projects_30062026.xlsx',
+    'outputs/ramat_gan_fresh.csv',
+    'רמת גן',
+    'outputs/ramat_gan_report.xlsx',
+    matched_cache_path='outputs/ramat_gan_matched_cache.json',
+)
+```
+
+### 4. Re-scrape and match Kiryat Ata (optional quality improvement)
+
+The Kiryat Ata scrape ran with OLD in-memory code — `הוצאת היתר בניה` events were logged as
+`[NEW EVENT]` and produced empty `permit_status`. The updated scraper code is now correct.
+Re-scraping would fix the ~14 status_advanced baseline, but is optional if results look right.
 
 ---
 
@@ -238,18 +390,29 @@ After the manual-review cycle is validated:
 | Path | Role |
 |---|---|
 | `scrapers/complot/api_scraper.py` | Complot API scraper — working; outputs `migrash` + `applicant_name` |
-| `scrapers/bartech/api_scraper.py` | Bartech API scraper — working, smoke-tested |
+| `scrapers/bartech/api_scraper.py` | Bartech API scraper — two-phase (list + detail pages); `min_year` param |
 | `scripts/run_bat_yam.py` | Full scrape runner (~80 min) |
 | `scripts/run_bat_yam_incremental.py` | Incremental runner — Phase A + Phase B (~10 min) |
-| `scripts/run_holon.py` | Holon (Bartech) full scrape runner |
+| `scripts/run_ramat_gan.py` | Ramat Gan (Complot, site_id=3) — needs office IP; re-scrape required |
+| `scripts/run_kiryat_ata.py` | Kiryat Ata (Complot, site_id=32) — needs office IP |
+| `scripts/run_holon.py` | Holon (Bartech) full scrape runner — min_year auto-computed |
+| `scripts/run_krayot.py` | Krayot (Bartech, vkrayot.co.il) — min_year auto-computed from projects file |
 | `transform/matcher.py` | Matching + report; `_pick_best_candidate()` for multi-project parcels |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |
 | `docs/bat_yam.xlsx` | Madlan projects export for Bat Yam (601 rows) |
 | `docs/holon_28062026.xlsx` | Madlan projects export for Holon (500 rows) |
-| `outputs/bat_yam_fresh.xlsx` | Latest full Bat Yam scrape — also serves as Phase A identity cache |
-| `outputs/holon_fresh.xlsx` | Latest Holon scrape (complete, 26,868 rows) |
-| `outputs/bat_yam_matched_cache.json` | Permit numbers matched to BO projects — Phase A input (generated by matcher) |
-| `outputs/bat_yam_report.xlsx` | Latest Bat Yam report |
-| `outputs/holon_report.xlsx` | Latest Holon report (not yet generated) |
+| `outputs/bat_yam_fresh.csv` | Latest full Bat Yam scrape |
+| `outputs/ramat_gan_fresh.csv` | Stale — scraped while IP-blocked, detail fields empty; re-scrape from office |
+| `outputs/holon_fresh.csv` | Complete — 21,039 permits (2026-07-02) |
+| `outputs/kiryat_ata_fresh.csv` | Complete — 3,318 permits (2026-07-02); some `היתר` statuses missing (old code) |
+| `outputs/kiryat_ata_report.xlsx` | Matcher output — 14 status_advanced, 41 untracked |
+| `outputs/holon_report.xlsx` | First run: 194 status_advanced, 3 untracked (pre-הסתיים fix); re-run in progress |
+| `outputs/holon_matched_cache.json` | 2,487 matched permits (first run) |
+| `outputs/krayot_fresh.csv` | Detail phase running ~14:00 2026-07-02 |
+| `docs/krayot_projects_30062026.xlsx` | Madlan projects export for Krayot (534 projects) |
+| `outputs/bat_yam_matched_cache.json` | Permit numbers matched to BO projects — Phase A input |
+| `outputs/ramat_gan_matched_cache.json` | Generated by first matcher run (not yet run) |
+| `outputs/bat_yam_report.xlsx` | Latest Bat Yam report (5 rows) |
+| `docs/Ramat_Gan_Projects_30062026.xlsx` | Madlan projects export for Ramat Gan |
 | `docs/session_handoffs/` | Per-session handoff notes |
