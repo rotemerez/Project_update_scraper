@@ -1,12 +1,30 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-02 (Session R)
+**Last Updated:** 2026-07-05 (Session S)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam + Ramat Gan via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot (Ramat Gan shelved)
 
 ---
 
 ## Done
+
+### Session S — 2026-07-05
+- **Bartech: applied 3 final reviewer annotation decisions**:
+  - `גמר בניה` in `STATUS_MAP`: `טופס 4` → `היתר` (construction complete, no Form 4 yet)
+  - `הפקת היתר` / `הוצא היתר` / `הוצאת היתר בניה` removed from `STAGE_TO_STATUS` → `_UNMAPPED_STAGES`
+    (permit may not be signed yet; reviewer: "doesn't fall under advancement statuses")
+  - `החלטה לדחות` — already correct (`בקשה להיתר`), no change
+- **Bartech: Krayot log triage** — 18 new `STAGE_TO_STATUS` entries added (construction progress
+  stages, Form-4-track variants, committee steps); 24 new `_UNMAPPED_STAGES` entries (warranty
+  release, field inspections, legal/enforcement, suspension, admin docs)
+- **Krayot matcher**: 38 rows — 1 `new_permit`, 35 `status_advanced`, 2 `untracked`
+  (cache: `outputs/krayot_matched_cache.json`, 1683 permits)
+- **Kiryat Ata re-scrape**: complete — 3,318 permits with updated scraper code
+  (`outputs/kiryat_ata_fresh.csv` via `scrape_log_kiryat_ata_B.txt`)
+- **Kiryat Ata matcher**: 64 rows — 0 `new_permit`, 23 `status_advanced`, 41 `untracked`
+  (was 14/41 before re-scrape; +9 `status_advanced` from fixed `היתר` detection)
+  (cache: `outputs/kiryat_ata_matched_cache.json`, 692 permits)
+- **Ramat Gan shelved** — no longer in scope; Krayot + Kiryat Ata are the Bartech/Complot test cases
 
 ### Session R — 2026-07-02 (handoff E)
 - **Applied all reviewer annotations** from screenshots to both scrapers:
@@ -282,73 +300,25 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Apply 3 remaining annotation decisions (when received)
+### 1. Review Krayot + Kiryat Ata reports
 
-3 decisions from the reviewer are still pending — user will update when received.
-Apply them to `scrapers/complot/api_scraper.py` and/or `scrapers/bartech/api_scraper.py`
-using the same `EVENT_TO_STATUS` / `STAGE_TO_STATUS` pattern.
+Both reports are ready for review:
+- `outputs/krayot_report.xlsx` — 38 rows (1 new_permit, 35 status_advanced, 2 untracked)
+- `outputs/kiryat_ata_report.xlsx` — 64 rows (0 new_permit, 23 status_advanced, 41 untracked)
 
-The annotation artifact (same URL, reviewer's selections preserved):
-https://claude.ai/code/artifact/b8043df2-083a-46cd-9ca0-05776418ed69
+Check for obvious false positives, especially in `untracked` rows (many single-apartment
+additions may slip through if `bakasha_description` is empty).
 
-Other unset items still in the artifact (can apply whenever answers arrive):
+### 2. Remaining unset annotation items (when reviewer responds)
+
+Still unclassified in the annotation artifact:
 - Complot: `הוצאת היתר בניה`, `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`, `עיכוב היתר ע"י ועדת ערר`
-- Bartech list: `ביטול היתר`, `שחרור ערבות ע"י מפקח/ת`
-- Bartech detail: several not captured in screenshots
+- Bartech detail: `תוכנית מאושרת בסמכות מהנדס` (currently in `_UNMAPPED_STAGES` — engineer-authority
+  approval; likely `היתר בתנאים` but needs confirmation)
 
-### 2. Check Krayot scrape status and run matcher
+### 3. New cities
 
-```powershell
-Get-Content 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_krayot.txt' -Tail 5
-```
-
-If done (`[DONE]` marker), check for any new `[NEW STATUS]` or `[NEW STAGE]` lines not yet in
-the code, then run the matcher:
-
-```python
-from transform.matcher import run as matcher_run
-matcher_run(
-    'docs/krayot_projects_30062026.xlsx',
-    'outputs/krayot_fresh.csv',
-    'קריות',
-    'outputs/krayot_report.xlsx',
-    matched_cache_path='outputs/krayot_matched_cache.json',
-)
-```
-
-### 3. Re-scrape Ramat Gan (from office IP)
-
-The existing `outputs/ramat_gan_fresh.csv` was scraped while the IP was blocked — all detail
-fields are empty. Need a clean re-scrape from the office to get `request_type`, `request_category`,
-`permit_status`. Then run the matcher.
-
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
-Start-Process -FilePath 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' `
-  -ArgumentList '-u', 'c:\R_PROJECTS\Project_update_scraper\scripts\run_ramat_gan.py' `
-  -WorkingDirectory 'c:\R_PROJECTS\Project_update_scraper' `
-  -RedirectStandardOutput 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_ramat_gan_B.txt' `
-  -RedirectStandardError  'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_err_ramat_gan_B.txt' `
-  -NoNewWindow
-```
-
-After scrape, run matcher:
-```python
-from transform.matcher import run as matcher_run
-matcher_run(
-    'docs/Ramat_Gan_Projects_30062026.xlsx',
-    'outputs/ramat_gan_fresh.csv',
-    'רמת גן',
-    'outputs/ramat_gan_report.xlsx',
-    matched_cache_path='outputs/ramat_gan_matched_cache.json',
-)
-```
-
-### 4. Re-scrape and match Kiryat Ata (optional quality improvement)
-
-The Kiryat Ata scrape ran with OLD in-memory code — `הוצאת היתר בניה` events were logged as
-`[NEW EVENT]` and produced empty `permit_status`. The updated scraper code is now correct.
-Re-scraping would fix the ~14 status_advanced baseline, but is optional if results look right.
+Current test cities are complete. Ready to add new Bartech or Complot cities when decided.
 
 ---
 
