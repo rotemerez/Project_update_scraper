@@ -5,3 +5,4 @@ __pycache__/
 *.pyo
 debug_download_*.png
 .env
+~$*
