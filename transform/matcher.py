@@ -70,6 +70,89 @@ def _is_relevant_type(request_type: str) -> bool:
     t = str(request_type or '').strip()
     return any(sub in t for sub in RELEVANT_TYPE_SUBSTRINGS)
 
+
+# Uses that indicate public/institutional buildings Madlan does not track.
+# Source: נוהל הקמת פרויקטים — "מבני ציבור (גני ילדים, בתי כנסת...) - לא נתייחס"
+# Checked against shimush_ikari first; falls back to bakasha_description keyword scan.
+_PUBLIC_USE_PATTERNS = [
+    'מבנה ציבור', 'מבנה טכני', 'מוסד חינוכי', 'בית ספר', "בי\"ס",
+    'גן ילדים', 'בית כנסת', 'בית כנסיה', 'כנסיה', 'מסגד', 'מדרשה',
+    'אולם ספורט', 'בריכה', 'בית חולים', 'מרפאה',
+    'בית עלמין', 'תחנת דלק', 'בנין ציבורי',
+]
+
+
+def _is_public_use(permit: pd.Series) -> bool:
+    """
+    True if shimush_ikari or bakasha_description indicates a public/institutional
+    building that is not tracked as a Madlan project per נוהל הקמת פרויקטים.
+    shimush_ikari (added to Complot scraper output) takes priority when present.
+    bakasha_description fallback only matches very clear primary-use indicators.
+    """
+    shimush = _clean(permit.get('shimush_ikari', ''))
+    if shimush and any(pat in shimush for pat in _PUBLIC_USE_PATTERNS):
+        return True
+    bakasha = _clean(permit.get('bakasha_description', ''))
+    if bakasha and any(pat in bakasha for pat in _PUBLIC_USE_PATTERNS):
+        return True
+    return False
+
+
+def _extract_unit_count(text: str) -> Optional[int]:
+    """
+    Try to extract the explicitly stated residential unit count from free Hebrew text.
+    Returns None if no clear count can be found (permits it through; don't over-filter).
+    """
+    t = str(text or '')
+    # Digit patterns: "3 יח\"ד", "3 יח'ד", "3 יחידות דיור", "3 דירות"
+    for pattern in [
+        r'(\d+)\s*יח["ד״]?["ד]',   # יח"ד variants
+        r'(\d+)\s*יחידות\s*דיור',
+        r'(\d+)\s*יחידות\s*מגורים',
+        r'(\d+)\s*דירות',
+    ]:
+        m = re.search(pattern, t)
+        if m:
+            return int(m.group(1))
+    # Explicit single-unit phrases
+    if any(p in t for p in ['דירה אחת', 'יחידה אחת', '1 דירה', 'בית מגורים אחד']):
+        return 1
+    return None
+
+
+def _is_below_unit_minimum(permit: pd.Series) -> bool:
+    """
+    True if the permit's unit count is explicitly below the minimum required to open a new
+    project (per נוהל הקמת פרויקטים):
+      - בניה חדשה / הריסה ובניה (non-תמ"א): minimum 3 units
+      - צמודי קרקע: minimum 4 units (same-developer rule enforced manually)
+      - תמ"א 38 (any variant): no minimum — never filter these
+    Checks the structured unit_count field first (from scraper), falls back to parsing
+    bakasha_description. Allows through if count cannot be determined.
+    """
+    request_type = _clean(permit.get('request_type', ''))
+
+    # תמ"א 38 has no unit minimum — never filter
+    if any(s in request_type for s in ['תמ"א 38', "תמ'א 38", 'חיזוק ותוספת']):
+        return False
+
+    # Try direct unit_count field from scraper first
+    raw_count = _clean(permit.get('unit_count', ''))
+    if raw_count:
+        try:
+            units = int(raw_count)
+        except ValueError:
+            units = None
+    else:
+        units = _extract_unit_count(_clean(permit.get('bakasha_description', '')))
+
+    if units is None:
+        return False  # can't determine — let through
+
+    if 'צמודי קרקע' in request_type:
+        return units < 4
+    return units < 3
+
 # Normalize the projects DB "סטטוס פרויקט" values to our STATUS_ORDER vocabulary
 DB_STATUS_NORM = {
     'טרום בקשה':    '',               # pre-request, not yet in STATUS_ORDER
@@ -204,6 +287,19 @@ def _dates_within(d1: Optional['datetime'], d2: Optional['datetime'], days: int 
     return abs((d1 - d2).days) <= days
 
 
+def _is_temporally_plausible(permit: pd.Series, proj: pd.Series, max_days_before: int = 365) -> bool:
+    """
+    False if the permit's request_date is more than max_days_before days before the
+    project's תאריך בקשה להיתר. Permits filed after the project's date are always allowed.
+    Returns True when either date is missing (can't disprove plausibility).
+    """
+    permit_date = _parse_date(permit.get('request_date'))
+    proj_date = _parse_date(proj.get('תאריך בקשה להיתר'))
+    if permit_date is None or proj_date is None:
+        return True
+    return (proj_date - permit_date).days <= max_days_before
+
+
 def _parse_migrash(val) -> str:
     """Extract a bare migrash number from a 'תבע+מגרש' field value like 'נת/1234/מגרש 5' or '5'."""
     s = _clean(val)
@@ -305,6 +401,7 @@ def run(
     min_year: Optional[int] = None,
     excluded_categories: Optional[set] = None,
     matched_cache_path: Optional[str] = None,
+    permit_url_base: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load projects and permits files, run matching, write flagged report to output_path.
@@ -321,6 +418,12 @@ def run(
     """
     if excluded_categories is None:
         excluded_categories = EXCLUDED_REQUEST_CATEGORIES
+
+    def _permit_url(permit_num: str) -> str:
+        if not permit_url_base or not permit_num:
+            return ''
+        return f'{permit_url_base}{permit_num}'
+
     projects_df = pd.read_excel(projects_path)
     if permits_path.endswith('.csv'):
         permits_df = pd.read_csv(permits_path, encoding='utf-8-sig')
@@ -401,13 +504,19 @@ def run(
                 if idx not in gh_candidates:
                     gh_candidates.append(idx)
         if gh_candidates:
-            matched_idx = _pick_best_candidate(gh_candidates, permit, projects_df)
-            match_method = 'gush_helka'
+            plausible = [
+                idx for idx in gh_candidates
+                if _is_temporally_plausible(permit, projects_df.loc[idx])
+            ]
+            if plausible:
+                matched_idx = _pick_best_candidate(plausible, permit, projects_df)
+                match_method = 'gush_helka'
 
         # 2. Address fallback
         if matched_idx is None:
             for idx, proj_row in projects_df.iterrows():
-                if am.match(proj_row.get('שם פרויקט', ''), permit.get('full_address', ''), city_hebrew):
+                if am.match(proj_row.get('שם פרויקט', ''), permit.get('full_address', ''), city_hebrew) \
+                        and _is_temporally_plausible(permit, proj_row):
                     matched_idx = idx
                     match_method = 'address'
                     break
@@ -419,13 +528,15 @@ def run(
 
             db_status_raw = str(proj.get('סטטוס פרויקט', '') or '').strip()
 
-            # Finished projects: minor alterations are irrelevant. Genuine new construction
-            # (a new project on the same parcel) surfaces as untracked so a new BO entry
-            # can be created; everything else is silently dropped.
-            if db_status_raw == 'הסתיים':
+            # Finished/occupied projects: minor alterations are irrelevant. Genuine new
+            # construction (a new project on the same parcel) surfaces as untracked so a
+            # new BO entry can be created; everything else is silently dropped.
+            if db_status_raw in ('הסתיים', 'אוכלס'):
                 if (_is_relevant_type(_clean(permit.get('request_type', '')))
                         or _is_relevant_type(_clean(permit.get('bakasha_description', '')))):
-                    if _is_recent(permit.get('request_date')):
+                    if (_is_recent(permit.get('request_date'))
+                            and not _is_public_use(permit)
+                            and not _is_below_unit_minimum(permit)):
                         scraped_status = _clean(permit.get('permit_status', ''))
                         scraped_date   = _clean(permit.get('permit_status_date', ''))
                         report_rows.append(_make_row(
@@ -433,6 +544,7 @@ def run(
                             proj=None, permit=permit, match_method='',
                             db_status='', scraped_status=scraped_status,
                             scraped_status_date=scraped_date, type_confirmed=True,
+                            request_url=_permit_url(_clean(permit.get('request_number', ''))),
                         ))
                 continue
 
@@ -443,6 +555,29 @@ def run(
             request_type   = _clean(permit.get('request_type', ''))
             type_known     = bool(request_type)
             type_relevant  = _is_relevant_type(request_type)
+
+            # Manual review: matched permit has a flagged event — surface after applying
+            # the same project-criteria filters used for other branches.
+            manual_review_event = _clean(permit.get('manual_review_event', ''))
+            if manual_review_event:
+                if not type_relevant:
+                    continue
+                if _is_public_use(permit):
+                    continue
+                # Waive unit minimum when the matched project is a תמ"א 38 project
+                project_sug_bnia = _clean(proj.get('סוג בנייה', ''))
+                if 'תמ"א 38' not in project_sug_bnia and _is_below_unit_minimum(permit):
+                    continue
+                report_rows.append(_make_row(
+                    flag='manual_review',
+                    proj=proj, permit=permit,
+                    match_method=match_method,
+                    db_status=db_status_raw,
+                    scraped_status=scraped_status,
+                    scraped_status_date=scraped_date,
+                    request_url=_permit_url(_clean(permit.get('request_number', ''))),
+                ))
+                continue
 
             if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known) \
                     and _is_recent(permit.get('request_date')):
@@ -455,6 +590,7 @@ def run(
                     scraped_status=scraped_status,
                     scraped_status_date=scraped_date,
                     type_confirmed=type_known,
+                    request_url=_permit_url(_clean(permit.get('request_number', ''))),
                 ))
 
             elif _is_upgrade(db_status_norm, scraped_status) \
@@ -470,15 +606,37 @@ def run(
                     scraped_status=scraped_status,
                     scraped_status_date=scraped_date,
                     type_confirmed=True,
+                    request_url=_permit_url(_clean(permit.get('request_number', ''))),
                 ))
             # else unchanged: match found, nothing new -> skip
 
         else:
-            # No matching project -- only flag permits with a confirmed relevant type
-            # and filed within the last year (older untracked permits are not actionable)
+            # No matching project — check for manual review event first
+            manual_review_event = _clean(permit.get('manual_review_event', ''))
+            if manual_review_event:
+                if (_is_relevant_type(_clean(permit.get('request_type', '')))
+                        and _is_recent(permit.get('request_date'))):
+                    scraped_status = _clean(permit.get('permit_status', ''))
+                    scraped_date   = _clean(permit.get('permit_status_date', ''))
+                    report_rows.append(_make_row(
+                        flag='manual_review',
+                        proj=None, permit=permit,
+                        match_method='',
+                        db_status='', scraped_status=scraped_status,
+                        scraped_status_date=scraped_date,
+                        request_url=_permit_url(_clean(permit.get('request_number', ''))),
+                    ))
+                continue
+
+            # Only flag permits with a confirmed relevant type,
+            # filed within the last year, that are not public buildings or below unit minimum.
             if not _is_relevant_type(_clean(permit.get('request_type', ''))):
                 continue
             if not _is_recent(permit.get('request_date')):
+                continue
+            if _is_public_use(permit):
+                continue
+            if _is_below_unit_minimum(permit):
                 continue
             scraped_status = _clean(permit.get('permit_status', ''))
             scraped_date   = _clean(permit.get('permit_status_date', ''))
@@ -490,6 +648,7 @@ def run(
                 db_status='',
                 scraped_status=scraped_status,
                 scraped_status_date=scraped_date,
+                request_url=_permit_url(_clean(permit.get('request_number', ''))),
                 type_confirmed=True,   # type_relevant was required to reach here
             ))
 
@@ -524,6 +683,7 @@ def _make_row(
     scraped_status: str,
     scraped_status_date: str,
     type_confirmed: bool = False,
+    request_url: str = '',
 ) -> dict:
     return {
         'flag':               flag,
@@ -541,9 +701,13 @@ def _make_row(
         'request_category':   _clean(permit.get('request_category', '')),
         'full_address':       str(permit.get('full_address', '')),
         'request_type':        _clean(permit.get('request_type', '')),
-        'bakasha_description': _clean(permit.get('bakasha_description', '')),
+        'shimush_ikari':        _clean(permit.get('shimush_ikari', '')),
+        'unit_count':           _clean(permit.get('unit_count', '')),
+        'manual_review_event':  _clean(permit.get('manual_review_event', '')),
+        'bakasha_description':  _clean(permit.get('bakasha_description', '')),
         'requestor':           _clean(permit.get('requestor', '')),
         'permit_block_lot':   _clean(permit.get('block_lot', '')),
+        'request_url':         request_url,
     }
 
 
@@ -552,5 +716,5 @@ def _print_summary(df: pd.DataFrame):
         return
     counts = df['flag'].value_counts()
     print('[Summary]')
-    for flag in ['new_permit', 'status_advanced', 'untracked']:
+    for flag in ['new_permit', 'status_advanced', 'untracked', 'manual_review']:
         print(f'  {flag}: {counts.get(flag, 0)}')

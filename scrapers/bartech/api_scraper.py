@@ -221,7 +221,7 @@ _UNMAPPED_STAGES = {
     # Krayot — suspension / cancellation (not a tracked milestone)
     'ביטול היתר', 'החלטה להשהות',
     'ועדת בדיקה תצא לשטח ותביא המלצתה בפני מליאת הועדה',
-    'תוכנית מאושרת בסמכות מהנדס',  # engineer-authority approval — reviewer not yet confirmed
+    'תוכנית מאושרת בסמכות מהנדס',
     # Krayot — legal / enforcement
     'ישיבה', 'הגשת כתב אישום', 'דיון מישפטי', 'פתיחת תיק פלילי',
     'צו הפסקה מנהלי', 'התראה מיכה',

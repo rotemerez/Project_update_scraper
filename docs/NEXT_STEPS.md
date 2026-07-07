@@ -1,12 +1,103 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-05 (Session S)
+**Last Updated:** 2026-07-07 (Session V)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot (Ramat Gan shelved)
 
 ---
 
 ## Done
+
+### Session V — 2026-07-07
+
+- **Matcher: project-criteria filters applied to matched `manual_review` branch** (`transform/matcher.py`):
+  - The `manual_review` branch previously emitted rows with zero filtering for matched permits.
+    Now applies the same checks used for `untracked`: `_is_relevant_type()`, `_is_public_use()`,
+    `_is_below_unit_minimum()`. Unit minimum is waived when the matched project's `סוג בנייה`
+    contains `תמ"א 38` (Complot may label these as `בניה חדשה` in the permit's `request_type`).
+  - Result on Kiryat Ata: 177 → 143 `manual_review` rows (−34 rows of noise).
+
+- **Matcher: temporal plausibility filter for gush-helka and address matches** (`transform/matcher.py`):
+  - Added `_is_temporally_plausible(permit, proj, max_days_before=365)`: returns False if the
+    permit's `request_date` is more than 1 year before the project's `תאריך בקשה להיתר`.
+  - Applied at BOTH match methods: gush-helka candidates are filtered before `_pick_best_candidate()`;
+    address-fallback matches are rejected inline.
+  - Prevents decade-old permits (e.g. 2013/2014) from matching to new projects (2020/2021) that
+    happened to land on the same parcel later. Both examples confirmed fixed (20130414, 20140330).
+
+- **Matcher: `_print_summary` now includes `manual_review` count**.
+
+- **Matcher: `permit_url_base` parameter** — optional string; when provided, appends the permit
+  number to generate a `request_url` column in every report row. For Kiryat Ata:
+  `permit_url_base='https://handasa.kiryat-ata.org.il/iturbakashot/#request/'`.
+  Replaces the earlier (unused) `complot_site_id` approach.
+
+- **Complot scraper: `הוצאת היתר בניה` removed from `EVENT_TO_STATUS`** — restores the Session U
+  intent. It belongs only in `_MANUAL_REVIEW_EVENTS` (requires human verification).
+
+- **Complot scraper: `תאריך הפקת היתר` extracted** from permit detail page header.
+  In `_merge_permit()`, if this field is present and its rank (`היתר` = 2) exceeds the event-based
+  status rank, `permit_status` and `permit_status_date` are overridden. טופס 4 events (rank 3)
+  still win. Requires re-scrape to populate; current CSV predates the change.
+
+- **Kiryat Ata report** (`outputs/kiryat_ata_report.xlsx`): 179 rows — 0 `new_permit`,
+  7 `status_advanced`, 29 `untracked`, 143 `manual_review`. Now includes `request_url` column.
+
+### Session U — 2026-07-06
+- **Diagnosed bakasha_description gap**: `מהות הבקשה` is a section header (free text block),
+  not a label-value row — `_extract_field` never found it. All 3,318 kiryat_ata_fresh.csv permits
+  had `bakasha_description = NaN`; `shimush_ikari` column was absent (added after last scrape).
+- **Fixed `bakasha_description` extraction**: added `_extract_section_text(soup, header_text)`
+  helper in `scrapers/complot/api_scraper.py` — walks following siblings of the section header,
+  stopping at known boundaries (`בעלי עניין`, `גושים וחלקות`, etc.). Handles both `<td>`-row
+  and `<div>`-based layouts.
+- **Added `unit_count` field**: `סך מספר יחידות דיור המבוקשות` extracted via `_extract_field`
+  (it's a standard label-value row). `_is_below_unit_minimum()` in matcher now reads this field
+  directly instead of regex-parsing `bakasha_description`; falls back to regex for old CSVs.
+- **Added `manual_review_event` field** (Complot scraper + matcher):
+  - New `_MANUAL_REVIEW_EVENTS` set: `הוצאת היתר בניה`, `ביטול היתר`, `החלטת ועדת ערר`,
+    `הפקת פרסום תמ"38`, `עיכוב היתר ע"י ועדת ערר` — per reviewer annotation decisions.
+  - `הוצאת היתר בניה` removed from `EVENT_TO_STATUS` (was `→ היתר`).
+  - `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38` removed from `_UNMAPPED_EVENTS`.
+  - `עיכוב היתר ע"י ועדת ערר` added (was unclassified, triggering `[NEW EVENT]` warnings).
+  - Event loop tracks the most recent `_MANUAL_REVIEW_EVENTS` occurrence as `manual_review_event`.
+  - Matcher: matched permit with `manual_review_event` → `flag='manual_review'` (before
+    `new_permit`/`status_advanced` logic); unmatched + recent + relevant type → `manual_review`.
+  - `manual_review_event` column added to report output.
+- **Bartech**: `תוכנית מאושרת בסמכות מהנדס` — confirmed IGNORE (stays in `_UNMAPPED_STAGES`,
+  stale "reviewer not yet confirmed" comment removed).
+- **Kiryat Ata re-scrape D started** (~11:07, ETA ~12:02) — first scrape with all new fields:
+  `bakasha_description` (section text), `shimush_ikari`, `unit_count`, `manual_review_event`.
+
+### Session T — 2026-07-05
+- **Matcher fix — `אוכלס` status**: projects with `סטטוס פרויקט = אוכלס` now treated identically
+  to `הסתיים` — any scraped permit on the same parcel: genuine new construction surfaces as
+  `untracked`, everything else dropped. Root cause: `אוכלס` was not in `DB_STATUS_NORM`, making
+  all scraped statuses appear as upgrades.
+- **Kiryat Ata report review (rows 1–9)**:
+  - Requests 20110413, 20140052, 20140208, 20150266 — confirmed false positives (matched to
+    completed `אוכלס` projects; wrong match or irrelevant minor-work permits). Now filtered by `אוכלס` fix.
+  - Requests 20220181, 20230159, 20230260, 20230283, 20230289 — confirmed valid status advances.
+  - Report: 64 → 60 rows (18 `status_advanced`, 42 `untracked`)
+- **Kiryat Ata report review (untracked section)**: identified false positives:
+  - 20250178 — wrong-project match (sub-permit for project 20250142, Complot list-page date bug)
+  - 20250184 — school gym (public building)
+  - 20250192 — minor changes to single family home
+  - 20250216 — no usable information
+  - 20250228 — single family home (below 3-unit minimum)
+  - 20250181, 20250188, 20250201, 20250203 — date confusion only (status_date = committee
+    scheduling event 28/06/2026, not filing date; these may be valid permits)
+- **Read נוהל הקמת פרויקטים PDF** — extracted project creation thresholds (3 units for בניה חדשה,
+  4 for צמודי קרקע, no minimum for תמ"א 38, exclude public buildings)
+- **Complot scraper: `shimush_ikari` field** — `_parse_bakasha_file()` now extracts `שימוש עיקרי`
+  from the detail page; appears in all future Complot CSV outputs
+- **Matcher: public-building and unit-minimum filters** — `_is_public_use()` (checks `shimush_ikari`
+  + `bakasha_description` keywords), `_is_below_unit_minimum()` (regex unit count, returns False if
+  count unparseable to avoid false negatives); both applied to `untracked` and `הסתיים`/`אוכלס` branches;
+  `shimush_ikari` added to report output
+- **Note**: new filters did not reduce the count (still 60 rows) because existing CSV lacks
+  `shimush_ikari` and `bakasha_description` text patterns for the problem permits may not match.
+  Need to inspect actual bakasha_description values next session.
 
 ### Session S — 2026-07-05
 - **Bartech: applied 3 final reviewer annotation decisions**:
@@ -300,25 +391,60 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Review Krayot + Kiryat Ata reports
+### 1. Re-scrape Kiryat Ata (scrape E)
 
-Both reports are ready for review:
-- `outputs/krayot_report.xlsx` — 38 rows (1 new_permit, 35 status_advanced, 2 untracked)
-- `outputs/kiryat_ata_report.xlsx` — 64 rows (0 new_permit, 23 status_advanced, 41 untracked)
+Two scraper changes now require a fresh CSV to take effect:
+- `הוצאת היתר בניה` removed from `EVENT_TO_STATUS` — currently in both sets, causing double-counting
+- `תאריך הפקת היתר` extraction added — will correctly set `permit_status = 'היתר'` for permits
+  like 20130371 that previously showed `'היתר בתנאים'`
 
-Check for obvious false positives, especially in `untracked` rows (many single-apartment
-additions may slip through if `bakasha_description` is empty).
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
+$env:PYTHONUTF8 = '1'
+Start-Process `
+  -FilePath 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' `
+  -ArgumentList 'c:\R_PROJECTS\Project_update_scraper\scripts\run_kiryat_ata.py' `
+  -WorkingDirectory 'c:\R_PROJECTS\Project_update_scraper' `
+  -RedirectStandardOutput 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_kiryat_ata_E.txt' `
+  -RedirectStandardError  'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_err_kiryat_ata_E.txt' `
+  -NoNewWindow
+```
 
-### 2. Remaining unset annotation items (when reviewer responds)
+After scrape completes, run matcher:
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
+$env:PYTHONUTF8 = '1'
+& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' -c @"
+from transform.matcher import run
+run(
+    projects_path='docs/Kiryat_Ata_Projects_30062026.xlsx',
+    permits_path='outputs/kiryat_ata_fresh.csv',
+    city_hebrew=u'קרית אתא',
+    output_path='outputs/kiryat_ata_report.xlsx',
+    matched_cache_path='outputs/kiryat_ata_matched_cache.json',
+    permit_url_base='https://handasa.kiryat-ata.org.il/iturbakashot/#request/',
+)
+"@
+```
 
-Still unclassified in the annotation artifact:
-- Complot: `הוצאת היתר בניה`, `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`, `עיכוב היתר ע"י ועדת ערר`
-- Bartech detail: `תוכנית מאושרת בסמכות מהנדס` (currently in `_UNMAPPED_STAGES` — engineer-authority
-  approval; likely `היתר בתנאים` but needs confirmation)
+### 2. Review Kiryat Ata report (143 `manual_review` rows)
 
-### 3. New cities
+The report is ready at `outputs/kiryat_ata_report.xlsx` (179 rows, with `request_url` column).
+Go through the `manual_review` rows — each has a link to the Complot permit page.
+Particular attention to:
+- Permits with `manual_review_event = 'ביטול היתר'` — project likely stalled
+- Permits with `manual_review_event = 'החלטת ועדת ערר'` — outcome unknown
+- Permits with `manual_review_event = 'הפקת פרסום תמ"38'` — תמ"א 38 publication event
 
-Current test cities are complete. Ready to add new Bartech or Complot cities when decided.
+### 3. Address request 20250178 (wrong-project match)
+
+Sub-permit for project 20250142 matched to open project 11051-3 via shared parcel. Complot
+list-page shows wrong date (2024-02-07 vs actual 13/07/2025). Accept as a known manual-review
+case or add a filter for "dig/foundation only" sub-permits.
+
+### 4. New cities
+
+Current test cities are at report-review stage. Ready to add new Bartech or Complot cities when decided.
 
 ---
 

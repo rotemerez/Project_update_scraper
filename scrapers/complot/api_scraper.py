@@ -45,7 +45,6 @@ EVENT_TO_STATUS: Dict[str, str] = {
     # היתר
     'מתן היתר למבקש':                           'היתר',
     'מסירת היתר(בסמכות מהנדס)':                'היתר',
-    'הוצאת היתר בניה':                          'היתר',
     'מסירת היתר':                               'היתר',
     'הפקת טופס 2':                              'היתר',
     'בדיקת פיקוח כללית בשטח':                  'היתר',
@@ -104,7 +103,6 @@ _UNMAPPED_EVENTS = {
     'הבקשה מתאימה למציאות',
     'הבקשה לא מתאימה למציאות',
     'בדיקת מפקח לבקשה להיתר',
-    'ביטול היתר',
     'תשלום אגרת תאגיד',
     'חישוב אגרת תאגיד',
     'ישיבת מליאת הועדה',
@@ -137,7 +135,6 @@ _UNMAPPED_EVENTS = {
     'דחיית בקשה בתנאי סף - מח\' מידע(3)',
     'הבקשה נסגרה ברישוי זמין בגרסה שניה על העורך לפתוח בקשה חדשה ברישוי זמין',
     # appeals / legal — outcome unknown, not a trackable milestone
-    'החלטת ועדת ערר',
     'דיון בועדת ערר',
     # inspection / admin — Kiryat Ata and similar cities
     'בטיפול אתי',          # "being handled by Eti" — staff routing note
@@ -166,7 +163,6 @@ _UNMAPPED_EVENTS = {
     'העברה לבודק/ת תוכניות', 'העברה לבקרה מרחבית',
     'העברה להתייחסות הפיקוח על הבניה', 'העברה להתייחסות חזות עיר', 'העברה להתייחסות תשתיות',
     'הפקת גליון דרישות',
-    'הפקת פרסום תמ"38',
     'השלמת תנאי סף טכניים', 'השלמת תנאי סף להתחלת בדיקה', 'השלמת תנאי סף לכניסה לדיון',
     "חוות דעת - מבנה תמ''א 38 - סרוק",
     'חישוב היטלים',
@@ -189,6 +185,16 @@ _UNMAPPED_EVENTS = {
     'הוגשה תכנית מתוקנת',
     'הפקת אגרות והיטלים',
     'שיבוץ בקשה לדיון / למאגר',
+}
+
+# Events that require manual human review — surfaced as flag='manual_review' in the report.
+# Not assigned a status rank; do not contribute to permit_status.
+_MANUAL_REVIEW_EVENTS = {
+    'הוצאת היתר בניה',         # permit issuance — ambiguous; may or may not mean the permit is signed
+    'ביטול היתר',               # permit cancellation — project may have stalled
+    'החלטת ועדת ערר',           # appeals committee decision — outcome unknown
+    'הפקת פרסום תמ"38',         # tama38 publication step — significance unclear
+    'עיכוב היתר ע"י ועדת ערר',  # permit delay by appeals committee — project stalled
 }
 
 STATUS_ORDER = ['בקשה להיתר', 'היתר בתנאים', 'היתר', 'טופס 4']
@@ -254,7 +260,7 @@ class ComplotPermitsAPI:
         """
         Returns permit dicts with keys:
           request_number, request_date, full_address, city, block_lot,
-          request_type, request_category, requestor,
+          request_type, request_category, shimush_ikari, requestor,
           permit_status, permit_status_date, scrape_status
         """
         _log(f'Fetching permit list for site_id={self.site_id}...')
@@ -396,6 +402,8 @@ class ComplotPermitsAPI:
           request_type         - תיאור הבקשה (construction description)
           request_category     - סוג הבקשה   (permit category)
           bakasha_description  - מהות הבקשה  (free-text nature of request)
+          shimush_ikari        - שימוש עיקרי (main use of the building)
+          unit_count           - סך מספר יחידות דיור המבוקשות (requested unit count)
           event                - most recent mappable event description
           event_date           - date of that event
           applicant_name       - מבקש row from בעלי עניין table
@@ -405,7 +413,10 @@ class ComplotPermitsAPI:
 
         request_type        = _extract_field(soup, 'תיאור הבקשה')
         request_category    = _extract_field(soup, 'סוג הבקשה')
-        bakasha_description = _extract_field(soup, 'מהות הבקשה')
+        bakasha_description = _extract_section_text(soup, 'מהות הבקשה')
+        shimush_ikari       = _extract_field(soup, 'שימוש עיקרי')
+        unit_count          = _extract_field(soup, 'סך מספר יחידות דיור המבוקשות')
+        permit_issue_date   = _extract_field(soup, 'תאריך הפקת היתר')
 
         # Events table: find by 'תיאור אירוע' header
         event_table = _find_table_with_header(soup, 'תיאור אירוע')
@@ -413,6 +424,8 @@ class ComplotPermitsAPI:
         best_event_date = ''
         best_rank = -1
         first_event_date = ''
+        manual_review_event = ''
+        manual_review_event_date = ''
 
         if event_table:
             headers = _extract_headers(event_table)
@@ -438,6 +451,12 @@ class ComplotPermitsAPI:
                     if not first_event_date or _earlier_date(event_date, first_event_date):
                         first_event_date = event_date
 
+                # Track manual review events (keep most recent by date)
+                if event_desc in _MANUAL_REVIEW_EVENTS:
+                    if not manual_review_event_date or _earlier_date(manual_review_event_date, event_date):
+                        manual_review_event = event_desc
+                        manual_review_event_date = event_date
+
                 status = _map_event(event_desc)
                 rank = STATUS_ORDER.index(status) if status in STATUS_ORDER else -1
                 if rank > best_rank:
@@ -445,7 +464,8 @@ class ComplotPermitsAPI:
                     best_event = event_desc
                     best_event_date = event_date
 
-                if event_desc and event_desc not in _UNMAPPED_EVENTS and not status:
+                if event_desc and event_desc not in _UNMAPPED_EVENTS \
+                        and event_desc not in _MANUAL_REVIEW_EVENTS and not status:
                     _log(f'  [NEW EVENT] Unmapped: [{event_desc}]')
 
         # Applicant: find מבקש row in בעלי עניין table
@@ -495,6 +515,10 @@ class ComplotPermitsAPI:
             'request_type':        request_type,
             'request_category':    request_category,
             'bakasha_description': bakasha_description,
+            'shimush_ikari':       shimush_ikari,
+            'unit_count':          unit_count,
+            'permit_issue_date':   permit_issue_date,
+            'manual_review_event': manual_review_event,
             'event':               best_event,
             'event_date':          best_event_date,
             'first_event_date':    first_event_date,
@@ -509,6 +533,16 @@ class ComplotPermitsAPI:
 
     def _merge_permit(self, raw: Dict, detail: Dict) -> Dict:
         permit_status = _map_event(detail.get('event', ''))
+        permit_status_date = detail.get('event_date', '')
+        # תאריך הפקת היתר is a header field that reliably marks permit issuance.
+        # Use it to set status=היתר when events don't already show something equal or higher.
+        permit_issue_date = detail.get('permit_issue_date', '')
+        if permit_issue_date:
+            issue_rank = STATUS_ORDER.index('היתר')
+            current_rank = STATUS_ORDER.index(permit_status) if permit_status in STATUS_ORDER else -1
+            if issue_rank > current_rank:
+                permit_status = 'היתר'
+                permit_status_date = permit_issue_date
         scrape_status = 'success' if raw.get('permit_num') and raw.get('address') else 'partial'
         # Prefer applicant_name from detail page (structured role table) over list-page requestor
         requestor = detail.get('applicant_name') or raw.get('requestor', '')
@@ -522,10 +556,13 @@ class ComplotPermitsAPI:
             'migrash':             detail.get('migrash', ''),
             'request_type':        detail.get('request_type', ''),
             'request_category':    detail.get('request_category', ''),
-            'bakasha_description': detail.get('bakasha_description', ''),
-            'requestor':           requestor,
+            'bakasha_description':  detail.get('bakasha_description', ''),
+            'shimush_ikari':        detail.get('shimush_ikari', ''),
+            'unit_count':           detail.get('unit_count', ''),
+            'manual_review_event':  detail.get('manual_review_event', ''),
+            'requestor':            requestor,
             'permit_status':       permit_status,
-            'permit_status_date':  detail.get('event_date', ''),
+            'permit_status_date':  permit_status_date,
             'first_event_date':    detail.get('first_event_date', ''),
             'scrape_status':       scrape_status,
         }
@@ -560,8 +597,11 @@ class ComplotPermitsAPI:
                 detail = {
                     'request_type':        record.get('request_type', ''),
                     'request_category':    record.get('request_category', ''),
-                    'bakasha_description': record.get('bakasha_description', ''),
-                    'applicant_name':      record.get('requestor', ''),
+                    'bakasha_description':  record.get('bakasha_description', ''),
+                    'shimush_ikari':        record.get('shimush_ikari', ''),
+                    'unit_count':           record.get('unit_count', ''),
+                    'manual_review_event':  record.get('manual_review_event', ''),
+                    'applicant_name':       record.get('requestor', ''),
                     'migrash':             record.get('migrash', ''),
                     'detail_block_lot':    record.get('block_lot', ''),
                     'event':               record.get('permit_status', ''),
@@ -611,6 +651,40 @@ def _extract_field(soup: 'BeautifulSoup', label_text: str) -> str:
                 val = sibling.get_text(strip=True)
                 if val:
                     return val
+    return ''
+
+
+_SECTION_STOPS = frozenset(['בעלי עניין', 'גושים וחלקות', 'שלבי הבקשה', 'תאריך אירוע', 'שלבי בניה'])
+
+
+def _extract_section_text(soup: 'BeautifulSoup', header_text: str) -> str:
+    """
+    Find a section-header element by exact text and collect the free text that follows it,
+    stopping at the next known section boundary.
+    Handles both <td>-row and <div>-based page structures.
+    """
+    for tag in soup.find_all(string=lambda t: t and t.strip() == header_text):
+        block = tag.find_parent()
+        # Walk up past inline containers to the nearest block element
+        while block and block.name in ('span', 'strong', 'em', 'b', 'a', 'label', 'font'):
+            block = block.find_parent()
+        if block is None:
+            continue
+        # For table cells, move up to the row so next_siblings are peer rows
+        if block.name == 'td':
+            row = block.find_parent('tr')
+            if row:
+                block = row
+        parts = []
+        for sibling in block.find_next_siblings():
+            text = sibling.get_text(separator=' ', strip=True)
+            if not text:
+                continue
+            if any(s in text for s in _SECTION_STOPS):
+                break
+            parts.append(text)
+        if parts:
+            return ' '.join(parts)
     return ''
 
 

@@ -1,6 +1,101 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-06-30
+**Last Updated:** 2026-07-07
+
+---
+
+## BUG-012 — `הוצאת היתר בניה` in both `EVENT_TO_STATUS` and `_MANUAL_REVIEW_EVENTS` simultaneously
+
+**Severity:** Medium — caused `permit_status` to show `היתר בתנאים` instead of `היתר` for permits where this was the highest-ranked event  
+**Fixed in:** Session V (2026-07-07)  
+**File:** `scrapers/complot/api_scraper.py` → `EVENT_TO_STATUS`
+
+### Root cause
+
+Session U intended to remove `הוצאת היתר בניה` from `EVENT_TO_STATUS` and move it exclusively to
+`_MANUAL_REVIEW_EVENTS`. The removal did not survive (code was in uncommitted working-tree state).
+With the event in both sets, the manual review flag fired correctly but the event also contributed to
+`best_rank`, causing `permit_status` to be set inconsistently depending on other events present.
+In practice, for permit 20130371, `permit_status = 'היתר בתנאים'` even though the permit had an
+`הוצאת היתר בניה` event with higher rank.
+
+### Fix
+
+Removed `'הוצאת היתר בניה': 'היתר'` from `EVENT_TO_STATUS`. The event now lives only in
+`_MANUAL_REVIEW_EVENTS`. Status `היתר` is now sourced from the `תאריך הפקת היתר` header field
+(see BUG-013) or from other `היתר`-mapping events (`מתן היתר למבקש`, `מסירת היתר`, etc.).
+
+---
+
+## BUG-013 — `permit_status` not set to `היתר` when only `תאריך הפקת היתר` header field is present
+
+**Severity:** Medium — permits with issued permits showed `היתר בתנאים` in the report  
+**Fixed in:** Session V (2026-07-07)  
+**File:** `scrapers/complot/api_scraper.py` → `_parse_bakasha_file()`, `_merge_permit()`
+
+### Root cause
+
+The permit detail page has a header field `תאריך הפקת היתר` (permit issuance date) that is set
+when the permit was formally issued. The scraper only derived `permit_status` from the events table
+(`שלבי הבקשה`). If the only `היתר`-level event was `הוצאת היתר בניה` (now removed from
+`EVENT_TO_STATUS`), no event mapped to `היתר` and the status remained at `היתר בתנאים`.
+
+### Fix
+
+`_parse_bakasha_file()` now extracts `תאריך הפקת היתר` via `_extract_field()`.
+`_merge_permit()` compares its rank (`היתר` = 2) against the event-derived status rank.
+If the field implies a higher status, `permit_status` and `permit_status_date` are overridden.
+`טופס 4` events (rank 3) still take priority. Requires re-scrape to populate existing CSVs.
+
+---
+
+## BUG-011 — Matched `manual_review` branch applied no project-criteria filters
+
+**Severity:** High — 40 of 177 `manual_review` rows were noise (irrelevant type, public use, stale date)  
+**Fixed in:** Session V (2026-07-07)  
+**File:** `transform/matcher.py` → `run()` matched branch
+
+### Root cause
+
+When a matched permit had a non-empty `manual_review_event`, the matcher emitted a row immediately
+without checking whether the permit met project-creation criteria. The same filters applied to
+`untracked` and `הסתיים`/`אוכלס` branches were absent here. Result: permits with irrelevant
+construction types (`תוספת למבנה קיים`, `שונות`), public buildings, and unit counts below the
+minimum all appeared as `manual_review` rows.
+
+### Fix
+
+Added three guards before emitting a `manual_review` row for a matched permit:
+1. `_is_relevant_type(request_type)` — must be True
+2. `_is_public_use(permit)` — must be False
+3. `_is_below_unit_minimum(permit)` — must be False, with an exception: if the matched project's
+   `סוג בנייה` contains `תמ"א 38`, the unit minimum is waived (Complot labels these as `בניה חדשה`).
+
+---
+
+## BUG-010 — Temporal mismatch: old permits matched to new projects via shared gush-helka
+
+**Severity:** High — permits from 2013/2014 matched to projects created in 2020/2021  
+**Fixed in:** Session V (2026-07-07)  
+**File:** `transform/matcher.py` → `run()`, new `_is_temporally_plausible()`
+
+### Root cause
+
+The gush-helka and address-fallback matching had no temporal guard. A permit from 2013 could match
+a project created in 2021 if they shared a parcel — even though they are entirely separate
+applications on the same land. Example: permit 20130414 (2013) matched project `הדקלים_3_קרית_אתא`
+whose `תאריך בקשה להיתר` is 2021-12-21 (8-year gap).
+
+### Fix
+
+Added `_is_temporally_plausible(permit, proj, max_days_before=365)`: returns False if the permit's
+`request_date` is more than 365 days before the project's `תאריך בקשה להיתר`. Applied at both
+match methods:
+- Gush-helka: candidates are filtered to `plausible` list before `_pick_best_candidate()`
+- Address fallback: plausibility check added inline before accepting the match
+
+When no candidates pass the check, `matched_idx` stays None and the permit falls through to the
+unmatched path where age and type filters apply.
 
 ---
 
