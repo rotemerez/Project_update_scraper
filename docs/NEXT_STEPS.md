@@ -1,12 +1,55 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-07 (Session V)
+**Last Updated:** 2026-07-08 (Session X)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot (Ramat Gan shelved)
 
 ---
 
 ## Done
+
+### Session X — 2026-07-08
+
+- **Kiryat Ata scrape F completed** — clean run from office IP, 3,318 permits, no IP block.
+  `outputs/kiryat_ata_fresh.csv` now valid (replaces corrupt scrape E output).
+
+- **Matcher: `הוצאת היתר בניה` manual_review suppression** (`transform/matcher.py`):
+  When `manual_review_event = 'הוצאת היתר בניה'` AND `permit_status = 'היתר'`, the permit is
+  no longer flagged for manual review — `תאריך הפקת היתר` already confirmed the issuance.
+  Only the 11 permits where `permit_status != 'היתר'` (no header field) still flag for review.
+  Applied to both matched and unmatched branches. Result: 143 → 59 `manual_review` rows.
+
+- **Matcher: new public-use `shimush_ikari` values** added to `_PUBLIC_USE_PATTERNS`:
+  `מוסדות חינוך`, `תחנת טרנספורמציה`, `תעשיה`, `תשתיות`, `שונות`
+  (`מבנה ציבור כללי` was already caught by the existing `מבנה ציבור` substring.)
+
+- **BUG-014 fixed**: `_is_public_use` was not called in the `status_advanced` and `new_permit`
+  branches — public-use buildings could surface as `status_advanced`. Fixed by adding
+  `and not _is_public_use(permit)` to both conditions.
+
+- **BUG-015 fixed**: `_is_below_unit_minimum` silently failed for all permits because
+  `unit_count` is loaded as `float64` (NaN-mixed column), making `'2.0'` unparseable by `int()`.
+  Fixed with `int(float(raw_count))`. Dropped 5 sub-minimum permits from `untracked`.
+
+- **Final Kiryat Ata report** (`outputs/kiryat_ata_report.xlsx`): **89 rows** —
+  0 `new_permit`, 8 `status_advanced`, 22 `untracked`, 59 `manual_review`.
+
+### Session W — 2026-07-07
+
+- **GitHub remote set up**: all commits pushed to https://github.com/rotemerez/Project_update_scraper
+  (`master` branch tracks `origin/master`).
+- **`.gitignore` updated**: added `~$*` rule to exclude Excel lock files (e.g. `~$Kiryat_Ata_Projects_30062026.xlsx`).
+
+- **Kiryat Ata scrape E attempted and failed (IP block)**:
+  - Scrape completed 3,318 permits with `scrape_status = success` — but detail pages returned
+    empty HTML (IP-blocked). Only 28 of 3,318 permits have any detail-page data.
+  - Root cause: `scrape_status` is based on list-page fields (`permit_num` + `address`) only;
+    it does NOT detect blocked/empty detail-page responses.
+  - Result: `kiryat_ata_fresh.csv` is now stale/corrupt. The old CSV from session D/S was overwritten.
+  - The previous `kiryat_ata_report.xlsx` (179 rows, from session V) is still intact and valid.
+  - Fix: re-scrape from office network (unblocked IP) tomorrow.
+
+- **Matcher run confirmed empty report** — correctly reflects the corrupt CSV (no events = no rows).
 
 ### Session V — 2026-07-07
 
@@ -391,52 +434,15 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Re-scrape Kiryat Ata (scrape E)
+### 1. Review Kiryat Ata report (59 `manual_review` rows)
 
-Two scraper changes now require a fresh CSV to take effect:
-- `הוצאת היתר בניה` removed from `EVENT_TO_STATUS` — currently in both sets, causing double-counting
-- `תאריך הפקת היתר` extraction added — will correctly set `permit_status = 'היתר'` for permits
-  like 20130371 that previously showed `'היתר בתנאים'`
+Report at `outputs/kiryat_ata_report.xlsx` (89 rows total). Each `manual_review` row has a
+`request_url` link. Pay attention to:
+- `manual_review_event = 'ביטול היתר'` — project likely stalled
+- `manual_review_event = 'החלטת ועדת ערר'` — appeal committee, outcome unknown
+- `manual_review_event = 'הפקת פרסום תמ"38'` — תמ"א 38 publication event
 
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
-$env:PYTHONUTF8 = '1'
-Start-Process `
-  -FilePath 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' `
-  -ArgumentList 'c:\R_PROJECTS\Project_update_scraper\scripts\run_kiryat_ata.py' `
-  -WorkingDirectory 'c:\R_PROJECTS\Project_update_scraper' `
-  -RedirectStandardOutput 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_kiryat_ata_E.txt' `
-  -RedirectStandardError  'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_err_kiryat_ata_E.txt' `
-  -NoNewWindow
-```
-
-After scrape completes, run matcher:
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'
-$env:PYTHONUTF8 = '1'
-& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' -c @"
-from transform.matcher import run
-run(
-    projects_path='docs/Kiryat_Ata_Projects_30062026.xlsx',
-    permits_path='outputs/kiryat_ata_fresh.csv',
-    city_hebrew=u'קרית אתא',
-    output_path='outputs/kiryat_ata_report.xlsx',
-    matched_cache_path='outputs/kiryat_ata_matched_cache.json',
-    permit_url_base='https://handasa.kiryat-ata.org.il/iturbakashot/#request/',
-)
-"@
-```
-
-### 2. Review Kiryat Ata report (143 `manual_review` rows)
-
-The report is ready at `outputs/kiryat_ata_report.xlsx` (179 rows, with `request_url` column).
-Go through the `manual_review` rows — each has a link to the Complot permit page.
-Particular attention to:
-- Permits with `manual_review_event = 'ביטול היתר'` — project likely stalled
-- Permits with `manual_review_event = 'החלטת ועדת ערר'` — outcome unknown
-- Permits with `manual_review_event = 'הפקת פרסום תמ"38'` — תמ"א 38 publication event
-
-### 3. Address request 20250178 (wrong-project match)
+### 2. Address request 20250178 (wrong-project match)
 
 Sub-permit for project 20250142 matched to open project 11051-3 via shared parcel. Complot
 list-page shows wrong date (2024-02-07 vs actual 13/07/2025). Accept as a known manual-review

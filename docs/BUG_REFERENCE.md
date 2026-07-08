@@ -1,6 +1,73 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-07
+**Last Updated:** 2026-07-08
+
+---
+
+## BUG-015 — `unit_count` float parsing silently failed; sub-minimum permits passed through
+
+**Severity:** Medium — permits with 1–2 units were not filtered by `_is_below_unit_minimum`  
+**Fixed in:** Session X (2026-07-08)  
+**File:** `transform/matcher.py` → `_is_below_unit_minimum()`
+
+### Root cause
+
+`permits_df` is loaded via `pd.read_csv` without `dtype=str`. Because the `unit_count` column
+contains NaN values, pandas infers it as `float64`. A value of `2` becomes `np.float64(2.0)`.
+`_clean()` converts it to the string `'2.0'`. `int('2.0')` raises `ValueError`, so `units`
+falls back to `None`, and the function returns `False` (let through). This silently bypassed
+the unit minimum check for all permits with integer unit counts in the CSV.
+
+### Fix
+
+Changed `int(raw_count)` → `int(float(raw_count))`. `float()` handles both `'2'` and `'2.0'`;
+the outer `int()` truncates to an integer. Affected 5 `untracked` rows in the Kiryat Ata report
+(all sub-minimum בניה חדשה permits with 1–2 units).
+
+---
+
+## BUG-014 — `_is_public_use` not checked in `status_advanced` and `new_permit` branches
+
+**Severity:** Medium — public-use buildings (מבנה ציבור כללי etc.) surfaced as `status_advanced`  
+**Fixed in:** Session X (2026-07-08)  
+**File:** `transform/matcher.py` → `run()` matched branch
+
+### Root cause
+
+`_is_public_use()` was only called in the `manual_review`, `untracked` (unmatched), and
+`הסתיים`/`אוכלס` branches. The `status_advanced` and `new_permit` branches had no such guard.
+A permit for a public building (e.g. `שימוש עיקרי = מבנה ציבור כללי`) that matched a project
+and showed a status upgrade would be emitted as `status_advanced`.
+
+### Fix
+
+Added `and not _is_public_use(permit)` to both the `status_advanced` and `new_permit` conditions.
+Removed 7 rows from the Kiryat Ata report (3 `status_advanced`, 4 others caught by new shimush_ikari
+patterns added in the same session).
+
+---
+
+## BUG-013 — `הוצאת היתר בניה` manual_review flag redundant when `תאריך הפקת היתר` confirms היתר
+
+**Severity:** Low — 84 rows flagged for manual review that were already confirmed as `היתר`  
+**Fixed in:** Session X (2026-07-08)  
+**File:** `transform/matcher.py` → `run()` matched + unmatched branches
+
+### Root cause
+
+`הוצאת היתר בניה` was placed in `_MANUAL_REVIEW_EVENTS` because the event alone does not
+confirm that the permit was signed. However, the scraper also extracts `תאריך הפקת היתר` from
+the detail page header and sets `permit_status = 'היתר'` when it is present. When both exist,
+the manual_review flag was still raised — even though the `תאריך הפקת היתר` field had already
+provided a reliable confirmation. Data confirmed: 1,550/1,561 Kiryat Ata permits with this event
+also have `permit_status = 'היתר'` (set by the header field).
+
+### Fix
+
+In both the matched and unmatched branches, skip the manual_review flag when
+`manual_review_event == 'הוצאת היתר בניה'` and `permit_status == 'היתר'`. Let the permit fall
+through to normal `status_advanced`/`untracked` logic. The 11 permits where `permit_status != 'היתר'`
+(no `תאריך הפקת היתר` on the page) still flag for manual review.
 
 ---
 

@@ -75,10 +75,11 @@ def _is_relevant_type(request_type: str) -> bool:
 # Source: נוהל הקמת פרויקטים — "מבני ציבור (גני ילדים, בתי כנסת...) - לא נתייחס"
 # Checked against shimush_ikari first; falls back to bakasha_description keyword scan.
 _PUBLIC_USE_PATTERNS = [
-    'מבנה ציבור', 'מבנה טכני', 'מוסד חינוכי', 'בית ספר', "בי\"ס",
+    'מבנה ציבור', 'מבנה טכני', 'מוסד חינוכי', 'מוסדות חינוך', 'בית ספר', "בי\"ס",
     'גן ילדים', 'בית כנסת', 'בית כנסיה', 'כנסיה', 'מסגד', 'מדרשה',
     'אולם ספורט', 'בריכה', 'בית חולים', 'מרפאה',
     'בית עלמין', 'תחנת דלק', 'בנין ציבורי',
+    'תחנת טרנספורמציה', 'תעשיה', 'תשתיות', 'שונות',
 ]
 
 
@@ -140,7 +141,7 @@ def _is_below_unit_minimum(permit: pd.Series) -> bool:
     raw_count = _clean(permit.get('unit_count', ''))
     if raw_count:
         try:
-            units = int(raw_count)
+            units = int(float(raw_count))  # float() handles '2.0' when CSV loaded without dtype=str
         except ValueError:
             units = None
     else:
@@ -558,8 +559,12 @@ def run(
 
             # Manual review: matched permit has a flagged event — surface after applying
             # the same project-criteria filters used for other branches.
+            # Exception: הוצאת היתר בניה is confirmed as היתר when תאריך הפקת היתר was
+            # present on the page (scraped_status == 'היתר'). Fall through to normal logic.
             manual_review_event = _clean(permit.get('manual_review_event', ''))
-            if manual_review_event:
+            hitir_confirmed = (manual_review_event == 'הוצאת היתר בניה'
+                               and scraped_status == 'היתר')
+            if manual_review_event and not hitir_confirmed:
                 if not type_relevant:
                     continue
                 if _is_public_use(permit):
@@ -580,7 +585,8 @@ def run(
                 continue
 
             if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known) \
-                    and _is_recent(permit.get('request_date')):
+                    and _is_recent(permit.get('request_date')) \
+                    and not _is_public_use(permit):
                 report_rows.append(_make_row(
                     flag='new_permit',
                     proj=proj,
@@ -596,7 +602,8 @@ def run(
             elif _is_upgrade(db_status_norm, scraped_status) \
                     and _scraped_date_is_actionable(permit, proj) \
                     and (_is_relevant_type(_clean(permit.get('request_type', '')))
-                         or _is_relevant_type(_clean(permit.get('bakasha_description', '')))):
+                         or _is_relevant_type(_clean(permit.get('bakasha_description', '')))) \
+                    and not _is_public_use(permit):
                 report_rows.append(_make_row(
                     flag='status_advanced',
                     proj=proj,
@@ -613,7 +620,10 @@ def run(
         else:
             # No matching project — check for manual review event first
             manual_review_event = _clean(permit.get('manual_review_event', ''))
-            if manual_review_event:
+            # הוצאת היתר בניה is confirmed when תאריך הפקת היתר was on the page
+            hitir_confirmed = (manual_review_event == 'הוצאת היתר בניה'
+                               and _clean(permit.get('permit_status', '')) == 'היתר')
+            if manual_review_event and not hitir_confirmed:
                 if (_is_relevant_type(_clean(permit.get('request_type', '')))
                         and _is_recent(permit.get('request_date'))):
                     scraped_status = _clean(permit.get('permit_status', ''))
