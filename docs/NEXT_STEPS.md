@@ -1,12 +1,79 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-08 (Session X)
+**Last Updated:** 2026-07-08 (Session Z)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot via Bartech/Complot (Ramat Gan shelved)
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech/Complot (Ramat Gan shelved)
 
 ---
 
 ## Done
+
+### Session Z — 2026-07-08
+
+- **Hadera scraper: reverted to plain type scan** (`scripts/run_hadera.py`):
+  Investigated two-phase parcel approach — found Bartech returns gush-wide permits for any
+  helka query, so 544 parcel pairs produced mostly duplicates; Phase A offered no coverage
+  benefit over `scraper.scrape()` with `min_year=2010`. Reverted to the same pattern used
+  by Holon/Krayot/Kiryat Ata.
+
+- **Sort order confirmed for Hadera type 51**: newest-first by permit number. Records go
+  back to 1949 (historical paper permits). `min_year=2010` early-exit fires as expected.
+  Sampled pages: page 100 = 2016, page 500 = 2011, page 1000 = 2007.
+
+- **Bartech `scrape_parcels` hardened** (`scrapers/bartech/api_scraper.py`):
+  - `max_pages` guard (for testing)
+  - Year-based early exit (stop when all permits on a page are pre-`min_year`)
+  - `max_pages_per_parcel = 20` hard cap
+  - Zero-new-streak exit: 3 consecutive pages with 0 new permits → stop (handles duplicate
+    parcels sharing the same large gush)
+  These improvements remain in the code even though Phase A was dropped for Hadera.
+
+- **Hadera scrape launched** (`outputs/scrape_log_hadera.txt`, started ~13:54):
+  - Type 51 (מסלול רישוי מלא): 259 pages → 1,295 permits (server stopped returning results
+    after page 259, despite reporting 6,188 total — likely a Hadera portal session cap)
+  - Type 56 (מסלול רישוי מקוצר): 197 pages total, running ~14:08
+  - Remaining types (57, 71, 72, 73): pending
+
+### Session Y — 2026-07-08
+
+- **Bartech scraper: `shimush_ikari` and `unit_count` added** (`scrapers/bartech/api_scraper.py`):
+  Confirmed both fields exist on Bartech detail pages (`שימוש עיקרי` and `מספר יח"ד` in DT/DD
+  structure). Extracted via `_extract_dl_field()` in `_parse_detail()`; initialized to `''` in
+  `_parse_row()`; wired into `_enrich_with_details()`. All `_is_public_use()` and
+  `_is_below_unit_minimum()` filters now have full data parity with Complot for Bartech cities.
+
+- **Bartech scraper: Hadera STATUS_MAP entries** — `פתיחה` → `בקשה להיתר`,
+  `תשלום פקדון` → `בקשה להיתר`, `בוצע פרסום` → `בקשה להיתר`.
+
+- **Bartech scraper: Hadera STAGE_TO_STATUS entries** — `ישיבת ועדה מקומית` → `בקשה להיתר`,
+  `שיבוץ בישיבת ועדה מקומית` → `בקשה להיתר`, `שיבוץ בועדת מישנה` → `בקשה להיתר`,
+  `דחיה` → `בקשה להיתר`, `הפקת בקשה לאישור תחילת עבודות` → `היתר`.
+
+- **Bartech scraper: Hadera `_UNMAPPED_STAGES` batch** — ~25 new Hadera-specific admin/routing
+  stage descriptions added (Rishuy Zamin workflow, fees, spatial review notes, inspection steps).
+
+- **Bartech scraper refactored for two-phase scraping**:
+  - `_enrich_with_details(seen)` extracted as standalone method
+  - `scrape_parcels(parcel_pairs)` — Phase A: fetches all permits by gush/helka pair
+  - `merge_and_enrich(*seen_dicts)` — merges multiple seen-dicts then enriches with details
+  - `_fetch_parcel_page(gush, helka, page)` — parcel search uses `GushNumber`+`HelkaNumber` params
+  - `early_exit_year` param added to `_scrape_type()` — stops paginating when all permits on a
+    page are older than the cutoff year
+
+- **Confirmed**: Hadera Bartech portal (`hadera.bartech-net.co.il`) supports gush/helka search
+  via `GushNumber` + `HelkaNumber` query params on the standard `SearchPermitApplicationResults`
+  endpoint. Returns all permit types for that parcel.
+
+- **`scripts/run_hadera.py` created** — two-phase runner: Phase A (parcel search for all 544
+  gush/helka pairs from projects file) + Phase B (1-year recent scan with early exit). Merges
+  and deduplicates before detail enrichment.
+
+- **`docs/Hadera_Projects_08072026.xlsx` added** — 544 unique gush/helka pairs; `min_year=2010`
+  (driven by `מנחם בגין 13 חדרה`, status `היתר בתנאים`, permit date 2010-10-31, no Form 4).
+
+- **Issue found during smoke test**: `scrape_parcels` has no early-exit by date and doesn't
+  honor `max_pages`. Parcel 10034-450 returned 39+ pages (all unrelated permits on that block).
+  Needs fix before running the real scrape — see Immediate section below.
 
 ### Session X — 2026-07-08
 
@@ -433,6 +500,16 @@
 ---
 
 ## Immediate — Do First Next Session
+
+### 0. Run Hadera matcher once scrape completes
+
+**Scrape running** (`outputs/scrape_log_hadera.txt`, started ~13:54).
+Type 51: 1,295 permits done. Type 56 running (197 pages). Types 57/71/72/73 pending.
+
+When `outputs/hadera_fresh.csv` exists, create and run `scripts/run_hadera_matcher.py`:
+- Copy from `scripts/run_kiryat_ata_matcher.py` (or `run_krayot_matcher.py`)
+- Update: projects file path, scrape CSV path, city name, `permit_url_base`
+  (check Hadera Bartech URL pattern for permit detail links)
 
 ### 1. Review Kiryat Ata report (59 `manual_review` rows)
 

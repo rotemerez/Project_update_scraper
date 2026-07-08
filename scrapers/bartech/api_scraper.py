@@ -9,6 +9,7 @@ Two-step process:
 Output schema (same as Complot):
   request_number, request_date, full_address, city, block_lot,
   request_type, request_category, requestor, bakasha_description,
+  shimush_ikari, unit_count,
   permit_status, permit_status_date, scrape_status
 """
 
@@ -78,6 +79,10 @@ STATUS_MAP: Dict[str, str] = {
     'החלטה לדחות':                                         'בקשה להיתר',
     'ישיבת ועדת משנה לתכנון':                              'בקשה להיתר',
     'ישיבת מליאת חברי הועדה':                              'בקשה להיתר',
+    # Hadera
+    'פתיחה':                                               'בקשה להיתר',
+    'תשלום פקדון':                                         'בקשה להיתר',
+    'בוצע פרסום':                                          'בקשה להיתר',
 }
 
 # Priority order: higher index = more significant (same as Complot)
@@ -125,6 +130,12 @@ STAGE_TO_STATUS: Dict[str, str] = {
     'בדיקה גליון דרישות':                                  'בקשה להיתר',
     'הגשת בקשה להיתר מקוונת לאחר פרסום':                  'בקשה להיתר',
     'הוגשה בקשה לבדיקה ראשונית':                          'בקשה להיתר',
+    # Hadera
+    'ישיבת ועדה מקומית':                                   'בקשה להיתר',
+    'שיבוץ בישיבת ועדה מקומית':                            'בקשה להיתר',
+    'שיבוץ בועדת מישנה':                                   'בקשה להיתר',
+    'דחיה':                                                'בקשה להיתר',
+    'הפקת בקשה לאישור תחילת עבודות':                       'היתר',
 }
 
 # Stage descriptions we know don't map to tracked milestones — suppresses log noise.
@@ -225,6 +236,29 @@ _UNMAPPED_STAGES = {
     # Krayot — legal / enforcement
     'ישיבה', 'הגשת כתב אישום', 'דיון מישפטי', 'פתיחת תיק פלילי',
     'צו הפסקה מנהלי', 'התראה מיכה',
+    # Hadera — Rishuy Zamin and routing
+    'בקשה מוכנה לשיבוץ לישיבה',
+    'בקרה מרחבית אינה תקינה - נשלחו הערות לעורך',
+    'הבקשה הועברה שלב לבקרה מרחבית במערכת רישוי זמין',
+    'הבקשה עומדת בתנאים מוקדמים',
+    'בוצע פרסום הקלות',
+    'בקשה להיתר - לפני ישיבה הועבר לבדיקת מפקח',
+    'העבר לבדיקת מח\' הפיקוח - לפני תשלום פיקדון',
+    'תשלום פיקדון', 'חישוב פיקדון',
+    'פתיחת תיק',
+    'פרסום הקלה/שימוש חורג לפי 149',
+    'בדיקת תנאים מוקדמים במערכת רישוי זמין',
+    'הגשת בקשה במערכת רישוי זמין',
+    'חיוב היטלי סלילה',
+    'בדיקת תאגיד המים', 'העברה לתאגיד המים',
+    'הפצה לגורמי פנים',
+    'בקרת תכן תקינה - העברה לסיכום והפקת דרישת תשלום',
+    'בדיקת פיקוח לפני ישיבה',
+    'הועבר לחישוב היטל שצ"פ',
+    'תשלום אגרת בניה', 'עדכון חשבון אגרות',
+    'הכנת אגרה -נמסרה הודעה למבקש', 'חישוב אגרת בניה',
+    'נשלח מכתב לשכן המסרב לחתו',
+    'הערות - בודק היתרים',
 }
 
 _HEADERS = {
@@ -265,6 +299,8 @@ def _parse_detail(html: str) -> Dict:
     Returns:
       request_type        - תאור הבקשה (construction description)
       bakasha_description - מהות הבקשה (free-text nature of request)
+      shimush_ikari       - שימוש עיקרי (primary use — public building filter)
+      unit_count          - מספר יח"ד (residential unit count)
       detail_block_lot    - gush-helka from detail page (more accurate than list page)
       permit_status       - highest-ranked status across all stage tables
       permit_status_date  - date of that stage
@@ -272,6 +308,8 @@ def _parse_detail(html: str) -> Dict:
     soup = BeautifulSoup(html, 'html.parser')
 
     request_type = _extract_dl_field(soup, 'תאור הבקשה')
+    shimush_ikari = _extract_dl_field(soup, 'שימוש עיקרי')
+    unit_count = _extract_dl_field(soup, 'מספר יח"ד')
 
     # מהות הבקשה uses <span>label</span> + plain text in a single <td>
     bakasha_description = ''
@@ -342,6 +380,8 @@ def _parse_detail(html: str) -> Dict:
     return {
         'request_type':        request_type,
         'bakasha_description': bakasha_description,
+        'shimush_ikari':       shimush_ikari,
+        'unit_count':          unit_count,
         'detail_block_lot':    detail_block_lot,
         'permit_status':       best_status,
         'permit_status_date':  best_date,
@@ -357,19 +397,18 @@ class BartechPermitsAPI:
         self.permit_types = permit_types if permit_types is not None else PERMIT_TYPES
         self.min_year = min_year   # exclude permits older than this year from list and detail phases
         self.max_pages: Optional[int] = None  # set to int for testing
+        self.max_pages_per_parcel: int = 20   # hard cap per gush/helka to prevent runaway on large blocks
 
         self._session = requests.Session()
         self._session.headers.update(_HEADERS)
         self._session.headers['Referer'] = f'{self.base_url}/SearchPermitApplication'
 
     def scrape(self) -> List[Dict]:
-        # Phase 1: collect all permits from list pages.
-        # Permits older than min_year are skipped entirely (not added to seen).
-        # Permits with no parseable date (year == 0) are always kept.
+        """Full scan across all permit types, filtered by self.min_year."""
         seen: Dict[str, Dict] = {}
         for type_id, type_label in self.permit_types.items():
             _log(f'TypeOfPermit={type_id} ({type_label})...')
-            permits = self._scrape_type(type_id, type_label)
+            permits = self._scrape_type(type_id, type_label, early_exit_year=self.min_year)
             new = 0
             skipped = 0
             for p in permits:
@@ -386,39 +425,106 @@ class BartechPermitsAPI:
                      f'(total unique: {len(seen)})')
             else:
                 _log(f'  -> {len(permits)} rows, {new} new (total unique: {len(seen)})')
+        return self._enrich_with_details(seen)
 
-        # Phase 2: enrich each unique permit with detail page data.
-        # All permits in seen are already >= min_year (filtered in phase 1).
+    def scrape_parcels(self, parcel_pairs: List[tuple]) -> Dict[str, Dict]:
+        """
+        Fetch all permits for the given (gush, helka) pairs without detail enrichment.
+        Returns a seen-dict keyed by request_number — pass the result to merge_and_enrich().
+        """
+        seen: Dict[str, Dict] = {}
+        for gush, helka in parcel_pairs:
+            page = 1
+            zero_new_streak = 0
+            while True:
+                if self.max_pages and page > self.max_pages:
+                    break
+                if page > self.max_pages_per_parcel:
+                    _log(f'  [CAP] Parcel {gush}-{helka}: hit {self.max_pages_per_parcel}-page cap, stopping')
+                    break
+                html = self._fetch_parcel_page(gush, helka, page)
+                if not html or 'לא נמצאו נתונים' in html:
+                    break
+                rows = self._parse_page(html, '', 51)  # type_label '' — detail page will correct it
+                if not rows:
+                    break
+                new = 0
+                for p in rows:
+                    if self.min_year:
+                        yr = _permit_year(p)
+                        if yr > 0 and yr < self.min_year:
+                            continue
+                    if p['request_number'] not in seen:
+                        seen[p['request_number']] = p
+                        new += 1
+                _log(f'  Parcel {gush}-{helka} page {page}: {len(rows)} rows, {new} new')
+                if new == 0:
+                    zero_new_streak += 1
+                    if zero_new_streak >= 3:
+                        _log(f'  Early exit parcel {gush}-{helka}: 3 consecutive pages with 0 new')
+                        break
+                else:
+                    zero_new_streak = 0
+                if self.min_year and rows:
+                    years = [_permit_year(r) for r in rows]
+                    dated = [y for y in years if y > 0]
+                    if dated and all(y < self.min_year for y in dated):
+                        _log(f'  Early exit parcel {gush}-{helka}: all pre-{self.min_year}')
+                        break
+                if len(rows) < 5:
+                    break  # last page
+                page += 1
+                time.sleep(0.3)
+        return seen
+
+    def merge_and_enrich(self, *seen_dicts: Dict[str, Dict]) -> List[Dict]:
+        """
+        Merge multiple seen-dicts (later dicts fill gaps in earlier ones) then
+        enrich every unique permit with its detail page. Use for two-phase scrapes.
+        """
+        merged: Dict[str, Dict] = {}
+        for d in seen_dicts:
+            for num, permit in d.items():
+                merged.setdefault(num, permit)
+        return self._enrich_with_details(merged)
+
+    def _enrich_with_details(self, seen: Dict[str, Dict]) -> List[Dict]:
         all_permits = list(seen.values())
-        detail_permits = all_permits
         _log(f'\nFetching detail pages for {len(all_permits)} unique permits...')
-        total = len(detail_permits)
-        for i, permit in enumerate(detail_permits):
-            entity_num  = permit['request_number']
-            def_type    = permit.pop('_definement_type', list(self.permit_types.keys())[0])
+        total = len(all_permits)
+        for i, permit in enumerate(all_permits):
+            entity_num = permit['request_number']
+            def_type   = permit.pop('_definement_type', list(self.permit_types.keys())[0])
             detail_html = self._fetch_detail(entity_num, def_type)
             if detail_html:
                 detail = _parse_detail(detail_html)
-                # Stages-based status overrides list-page status when available
                 if detail['permit_status']:
                     permit['permit_status']      = detail['permit_status']
                     permit['permit_status_date'] = detail['permit_status_date']
-                # request_type from detail is more accurate (construction description)
                 if detail['request_type']:
                     permit['request_type'] = detail['request_type']
                 if detail['bakasha_description']:
                     permit['bakasha_description'] = detail['bakasha_description']
-                # Detail page gush/helka overrides list-page value when available
+                if detail['shimush_ikari']:
+                    permit['shimush_ikari'] = detail['shimush_ikari']
+                if detail['unit_count']:
+                    permit['unit_count'] = detail['unit_count']
                 if detail['detail_block_lot']:
                     permit['block_lot'] = detail['detail_block_lot']
             if (i + 1) % 200 == 0:
                 _log(f'  [{i + 1}/{total}] detail pages fetched')
             time.sleep(0.2)
-
-        _log(f'Detail phase complete.')
+        _log('Detail phase complete.')
         return all_permits
 
-    def _scrape_type(self, type_id: int, type_label: str) -> List[Dict]:
+    def _scrape_type(self, type_id: int, type_label: str,
+                     early_exit_year: Optional[int] = None) -> List[Dict]:
+        """
+        Scrape all pages for a single TypeOfPermit.
+        If early_exit_year is set, stops as soon as an entire page contains only
+        permits older than that year (by request_date). Permits with unparseable
+        dates are treated as recent and never trigger early exit.
+        """
         permits = []
         page = 1
         last_page = None
@@ -436,11 +542,35 @@ class BartechPermitsAPI:
                 break
             permits.extend(rows)
             _log(f'  [{type_id}] page {page}/{last_page or "?"}: {len(rows)} rows')
+            if early_exit_year and rows:
+                years = [_permit_year(r) for r in rows]
+                dated = [y for y in years if y > 0]
+                if dated and all(y < early_exit_year for y in dated):
+                    _log(f'  Early exit: all permits on page {page} are pre-{early_exit_year}')
+                    break
             if last_page and page >= last_page:
                 break
             page += 1
             time.sleep(0.3)
         return permits
+
+    def _fetch_parcel_page(self, gush: str, helka: str, page: int) -> str:
+        params = {
+            'searchType': 'ByDetails',
+            'GushNumber': gush,
+            'HelkaNumber': helka,
+            'g-recaptcha-response': 'x',
+            'page': page,
+        }
+        try:
+            resp = self._session.get(
+                f'{self.base_url}{RESULTS_PATH}', params=params, timeout=30)
+            resp.raise_for_status()
+            resp.encoding = 'utf-8'
+            return resp.text
+        except Exception as e:
+            _log(f'  [WARN] parcel {gush}-{helka} page {page}: {e}')
+            return ''
 
     def _fetch_page(self, type_id: int, page: int):
         params = {
@@ -542,6 +672,8 @@ def _parse_row(tr, type_label: str, type_id: int, city: str) -> Optional[Dict]:
         'request_category':   type_label,
         'requestor':          requestor,
         'bakasha_description': '',
+        'shimush_ikari':      '',
+        'unit_count':         '',
         'permit_status':      STATUS_MAP.get(status_raw, ''),
         'permit_status_date': '',
         'scrape_status':      'success' if full_address else 'partial',
