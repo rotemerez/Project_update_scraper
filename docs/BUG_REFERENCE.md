@@ -4,6 +4,38 @@
 
 ---
 
+## BUG-016 — `בנייה חדשה` (double-yod) not matched by `בניה חדשה` (single-yod) substring
+
+**Severity:** Medium — legitimate new-construction upgrades silently dropped for cities using the double-yod spelling  
+**Fixed in:** Session E (2026-07-08, after Hadera run)  
+**File:** `transform/matcher.py` → `RELEVANT_TYPE_SUBSTRINGS`
+
+### Root cause
+
+Hebrew has two accepted spellings of the word "building": `בניה` (single-yod, traditional) and
+`בנייה` (double-yod, academically preferred). Different municipalities use different spellings in
+their Bartech portals. Hadera uses `בנייה חדשה` (311 of 902 new-construction permits), while
+the matcher only checked for `בניה חדשה`. The mismatch caused all double-yod permits to fail
+`_is_relevant_type()` silently, dropping them from all report branches.
+
+### Fix
+
+Added both variants to `RELEVANT_TYPE_SUBSTRINGS`:
+```python
+'בניה חדשה',
+'בנייה חדשה',     # alternate spelling (double-yod) seen in Hadera Bartech
+'הריסה ובניה',
+'הריסה ובנייה',   # double-yod variant
+```
+
+### When adding a new city
+
+**Always check** the `request_type` value distribution in the fresh CSV before running the matcher
+(`df['request_type'].value_counts()`). Look for double-yod variants of any construction type
+substring. Add the variant if found — do not assume single-yod is universal.
+
+---
+
 ## BUG-015 — `unit_count` float parsing silently failed; sub-minimum permits passed through
 
 **Severity:** Medium — permits with 1–2 units were not filtered by `_is_below_unit_minimum`  

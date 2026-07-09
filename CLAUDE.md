@@ -149,6 +149,14 @@ Rules:
 - Think before writing: scraper logic, field mapping, and validation rules should be
   reasoned through before implementation
 
+### New-City Checklist — Before Running Matcher
+1. Print `df['request_type'].value_counts()` on the fresh CSV.
+2. Check for **double-yod spelling variants** of any tracked construction type:
+   `בנייה חדשה` vs `בניה חדשה`, `הריסה ובנייה` vs `הריסה ובניה`, etc.
+   Both spellings are valid Hebrew; different portals use different conventions.
+   Add the variant to `RELEVANT_TYPE_SUBSTRINGS` in `transform/matcher.py` if found.
+   (See BUG-016 in `docs/BUG_REFERENCE.md` — Hadera was the discovery case.)
+
 ### Data Integrity — No Invented Values
 **Never fabricate or infer field values that did not come from a real data source.**
 

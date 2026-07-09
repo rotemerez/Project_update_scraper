@@ -53,7 +53,9 @@ STATUS_ORDER = ['בקשה להיתר', 'היתר בתנאים', 'היתר', 'ט�
 # Minor work (room additions, renovations, permits-for-business, etc.) is excluded.
 RELEVANT_TYPE_SUBSTRINGS = [
     'בניה חדשה',
+    'בנייה חדשה',     # alternate spelling (double-yod) seen in Hadera Bartech
     'הריסה ובניה',    # covers תמ"א 38/2 and non-תמ"א demolition+rebuild
+    'הריסה ובנייה',   # double-yod variant
     'פינוי בינוי',
     'בינוי פינוי',
     'עיבוי בינוי',
@@ -584,9 +586,13 @@ def run(
                 ))
                 continue
 
+            project_sug_bnia = _clean(proj.get('סוג בנייה', ''))
+            waive_unit_min = 'תמ"א 38' in project_sug_bnia
+
             if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known) \
                     and _is_recent(permit.get('request_date')) \
-                    and not _is_public_use(permit):
+                    and not _is_public_use(permit) \
+                    and (waive_unit_min or not _is_below_unit_minimum(permit)):
                 report_rows.append(_make_row(
                     flag='new_permit',
                     proj=proj,
@@ -603,7 +609,8 @@ def run(
                     and _scraped_date_is_actionable(permit, proj) \
                     and (_is_relevant_type(_clean(permit.get('request_type', '')))
                          or _is_relevant_type(_clean(permit.get('bakasha_description', '')))) \
-                    and not _is_public_use(permit):
+                    and not _is_public_use(permit) \
+                    and (waive_unit_min or not _is_below_unit_minimum(permit)):
                 report_rows.append(_make_row(
                     flag='status_advanced',
                     proj=proj,

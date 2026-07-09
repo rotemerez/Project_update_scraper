@@ -1,12 +1,73 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-08 (Session Z)
+**Last Updated:** 2026-07-09 (Session F)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech/Complot (Ramat Gan shelved)
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session F — 2026-07-09
+
+- **Diagnostic scripts deleted**: `scripts/diagnose_hadera.py`, `scripts/diagnose_hadera2.py`
+
+- **Committee registry built**: `config/committees.py` — 160 entries covering all 162 project-file cities.
+  - 46 active Complot committees (with `site_id`)
+  - 26 active Bartech committees (with `base_url` + `permit_url_base`)
+  - 1 excluded `url_unverified` (Netanya — `vaadnet.netanyagis.co.il` needs testing)
+  - 3 excluded `proprietary` (תל אביב, ירושלים, קצרין)
+  - 84 excluded `no_scraper` (cities in projects file with no known portal)
+  - Krayot handled as one entry with `cities_hebrew: [קרית מוצקין, קרית ביאליק, קרית ים]`
+  - `include_bakasha_meqdamit=True` for פתח תקווה and הרצליה (per CLAUDE.md exception)
+  - Validated: all 162 project cities present, no duplicates, no missing site_id/base_url
+  - Source: `local_committee_scrapers/unified_scraper/municipal_scraper/registry/dispatcher.py`
+
+- **Open question for next session**: 72 active committees seems low. Several "no_scraper" cities
+  with large project counts (מזכרת בתיה 95, באר יעקב 96, זכרון יעקב 62, מבשרת ציון 75,
+  טירת הכרמל 78, נשר 30, אור עקיבא 45) may be served by regional-council portals in the
+  dispatcher that were not linked. Needs investigation.
+
+### Session E — 2026-07-08
+
+- **Hadera matcher run** — 53 rows: 8 `status_advanced`, 45 `untracked`, 0 `manual_review`.
+  2,788 permits scraped; 374 matched to projects.
+
+- **BUG-016 fixed** (`transform/matcher.py` → `RELEVANT_TYPE_SUBSTRINGS`):
+  Hadera Bartech spells construction type as `בנייה חדשה` (double-yod) while the substring list
+  had only `בניה חדשה` (single-yod). 5 matched upgrades and 44 untracked permits were silently
+  dropped. Added `'בנייה חדשה'` and `'הריסה ובנייה'` to the list. Before running the matcher
+  on any new city, always check `df['request_type'].value_counts()` for spelling variants.
+  Documented in `docs/BUG_REFERENCE.md` (BUG-016) and `CLAUDE.md` (New-City Checklist).
+
+- **Unit minimum check added to `status_advanced` and `new_permit` branches** (`transform/matcher.py`):
+  These two branches previously skipped `_is_below_unit_minimum`. Single-unit permits (e.g.
+  `בית פרטי דו משפחתי`, `unit_count=1`) were surfacing as status updates for multi-unit projects.
+  Fixed by computing `waive_unit_min = 'תמ"א 38' in project_sug_bnia` and adding
+  `and (waive_unit_min or not _is_below_unit_minimum(permit))` to both conditions.
+  תמ"א 38 projects are always tracked regardless of unit count (per נוהל הקמת פרויקטים).
+
+- **Nationwide scrape architecture designed and documented** (see item 8 in Later section):
+  Decisions: office-based scraping (fixed IP), incremental mode for regular runs, SQLite for
+  permit storage, nation-wide projects export, single consolidated report across all committees.
+  `docs/all_projects_08072026.xlsx` reviewed: 24,886 projects, 162 cities. Canonical scraper
+  registry source: `C:\R_PROJECTS\local_committee_scrapers\registry\dispatcher.py`.
+
+### Session AA — 2026-07-08
+
+- **`scripts/run_hadera_matcher.py` pre-built** — ready to run once `hadera_fresh.csv` exists.
+  Copies the Kiryat Ata matcher pattern; uses `docs/Hadera_Projects_08072026.xlsx`,
+  `outputs/hadera_fresh.csv`, city `חדרה`, cache `outputs/hadera_matched_cache.json`,
+  `permit_url_base='https://hadera.bartech-net.co.il/PermitApplicationDetails?Entity_Number='`.
+
+- **Hadera stage classifier artifact built**:
+  URL: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
+  All 182 unique `[NEW STAGE] Unmapped` strings from the Hadera scrape log.
+  Auto-detects potential milestone hints (`טופס 4?`, `היתר?`, `היתר בתנאים?`, `closed?`).
+  Bulk "Mark visible → ignore" action + search filter for fast triage.
+  Export splits into `{ STAGE_TO_STATUS: {...}, _UNMAPPED_STAGES: [...] }` matching Python dict names.
+  State persists in browser localStorage. Shareable — anyone with link can annotate independently
+  (annotations don't sync; merge exports manually if splitting work).
 
 ### Session Z — 2026-07-08
 
@@ -501,15 +562,33 @@
 
 ## Immediate — Do First Next Session
 
-### 0. Run Hadera matcher once scrape completes
+### 0. Verify committee count — audit no_scraper cities
 
-**Scrape running** (`outputs/scrape_log_hadera.txt`, started ~13:54).
-Type 51: 1,295 permits done. Type 56 running (197 pages). Types 57/71/72/73 pending.
+The registry currently has 72 active committees. The user believes this is too low.
+Approach for next session:
 
-When `outputs/hadera_fresh.csv` exists, create and run `scripts/run_hadera_matcher.py`:
-- Copy from `scripts/run_kiryat_ata_matcher.py` (or `run_krayot_matcher.py`)
-- Update: projects file path, scrape CSV path, city name, `permit_url_base`
-  (check Hadera Bartech URL pattern for permit detail links)
+1. For each `no_scraper` city with >10 projects, check whether a dispatcher entry covers it
+   as a regional council (e.g. does "emek hefer" serve בנימינה גבעת עדה? does "hof hacarmel"
+   serve עתלית or פוריידיס?).
+2. Look up the dispatcher entry's `url` in a browser; check whether the portal lists the city.
+3. If confirmed, change the registry entry to the correct scraper + add `city_name_hebrew` mapping.
+4. Candidate cities (sorted by project count):
+   - באר יעקב (96) — near Rehovot/Gezer area
+   - מזכרת בתיה (95) — Gezer regional council?
+   - מבשרת ציון (75) — mateh yehuda bartech?
+   - טירת הכרמל (78) — own portal or hof hacarmel?
+   - זכרון יעקב (62) — own portal?
+   - אור עקיבא (45) — hof hacarmel?
+   - בנימינה גבעת עדה (42) — emek hefer bartech?
+   - נשר (30) — own portal near Haifa?
+
+### 1. Classify Hadera unmapped stages + add to scraper
+
+Artifact: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
+Use search + bulk-ignore for fast triage. Export JSON, then add entries to
+`scrapers/bartech/api_scraper.py`:
+- `STAGE_TO_STATUS` dict: strings that map to a real milestone
+- `_UNMAPPED_STAGES` set: admin noise (silence the `[NEW STAGE]` log warnings)
 
 ### 1. Review Kiryat Ata report (59 `manual_review` rows)
 
@@ -555,7 +634,27 @@ All distinct events from the 2011–2026 scrape have been catalogued (see sessio
 Three new ones were added. Remaining unmapped events are intentionally left blank (admin/processing).
 No further action needed unless new event types surface in future scrapes.
 
-### 8. V2 — automatic backoffice writes
+### 8. V2 — regular all-committee scrape + consolidated report
+
+**Architecture decisions (2026-07-08):**
+- **Scraping runs from the office** — fixed IP avoids the Complot blocks that hit cloud runners.
+  Use Windows Task Scheduler or a local cron job to trigger each city's runner script.
+- **Incremental mode for regular runs** — refresh all cached-matched permits + scan the last
+  N days of new submissions per city (the matched-cache + `scrape_targeted` pattern already
+  exists for Bat Yam). Full scrapes drop to quarterly per city.
+- **Nation-wide projects export** — a single export covering all tracked municipalities replaces
+  per-city Excel files. Either automated via backoffice API (see item 4) or a scheduled manual
+  export before each report run.
+- **Single consolidated report** — one Excel file across all committees, with a `committee`
+  column, sorted by committee then by flag priority (`status_advanced` → `new_permit` →
+  `untracked` → `manual_review`). The top-level runner calls each city's `matcher.run()`,
+  concatenates the returned DataFrames, and writes the merged file.
+
+**Blocking prerequisites before V2:**
+1. All per-system scraper/matcher procedures finalised and stable (Complot + Bartech).
+2. Nation-wide projects export confirmed (API or scheduled manual — still being investigated).
+
+### 9. V2 — automatic backoffice writes
 After the manual-review cycle is validated:
 - Build `backoffice/client.py` (API wrapper)
 - Build `transform/mapper.py` (scraped fields → backoffice payload)
