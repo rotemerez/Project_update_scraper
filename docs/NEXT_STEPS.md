@@ -1,12 +1,21 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-09 (Session J)
+**Last Updated:** 2026-07-12 (Session K)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session K — 2026-07-12
+
+- **ישובי הברון scraper built** (`scripts/run_yishuvei_habaron.py`) — discovered site is Complot `site_id=14` at `handasi.complot.co.il` (not the SharePoint portal). Full scrape launched: 9,737 permits across 2011–2026.
+- **Complot api_scraper.py updated** — 5 new `_UNMAPPED_EVENTS` entries for ישובי הברון: `פתיחת תיק`, `שליחת מכתבי החלטה`, `החלטה לדחות את הדיון`, `החלטה לא לאשר`, `ישיבת מליאת הועדה המקומית`; 1 new `EVENT_TO_STATUS` entry: `החלטה להמליץ למחוזית לאשר` → `'היתר בתנאים'`; also 4 additional unmapped events found mid-scrape: `בדיקת מפקח`, `תיק הועבר לבדיקת מפקח`, `אישור מחלקת השבחה להפקת היתר`, `התיק הועבר לדיון`.
+- **ישובי הברון matcher script created** (`scripts/run_yishuvei_habaron_matcher.py`) — ready to run when scrape completes.
+- **committees.py updated** — ישובי הברון moved from `_EXCLUDED` (no_scraper) to `_COMPLOT` with `site_id=14, exclude=False`.
+- **Mitzpe_afek matcher complete** — `outputs/mitzpe_afek_report.xlsx`: 14 status_advanced, 33 untracked, 0 manual_review; cache: `outputs/mitzpe_afek_matched_cache.json` (601 permits).
+- **Committee endpoint validator built** (`scripts/validate_committees.py`) — probes all active committees; confirmed **77/77 OK** (all Complot site_ids and Bartech base_urls reachable and returning data).
 
 ### Session J — 2026-07-09
 
@@ -102,67 +111,7 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Classify Hadera unmapped stages + add to scraper
-
-Artifact: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
-Use search + bulk-ignore for fast triage. Export JSON, then add entries to
-`scrapers/bartech/api_scraper.py`:
-- `STAGE_TO_STATUS` dict: strings that map to a real milestone
-- `_UNMAPPED_STAGES` set: admin noise (silence the `[NEW STAGE]` log warnings)
-
-### 1. Review Kiryat Ata report (59 `manual_review` rows)
-
-Report at `outputs/kiryat_ata_report.xlsx` (89 rows total). Each `manual_review` row has a
-`request_url` link. Pay attention to:
-- `manual_review_event = 'ביטול היתר'` — project likely stalled
-- `manual_review_event = 'החלטת ועדת ערר'` — appeal committee, outcome unknown
-- `manual_review_event = 'הפקת פרסום תמ"38'` — תמ"א 38 publication event
-
-### 2. Address request 20250178 (wrong-project match)
-
-Sub-permit for project 20250142 matched to open project 11051-3 via shared parcel. Complot
-list-page shows wrong date (2024-02-07 vs actual 13/07/2025). Accept as a known manual-review
-case or add a filter for "dig/foundation only" sub-permits.
-
-### 3. Run mitzpe_afek matcher + review reports
-
-| Committee | Status | Next step |
-|---|---|---|
-| הראל (מבשרת ציון) | **DONE** — `outputs/harel_report.xlsx` (5 status_advanced, 32 untracked) | Review report |
-| זמורה (מזכרת בתיה) | **DONE** — `outputs/zmora_report.xlsx` (7 status_advanced, 70 untracked) | Review report |
-| מיצפה אפק (באר יעקב) | **CSV done** — `outputs/mitzpe_afek_fresh.csv` (3888 permits) | **Run matcher**: `scripts/run_mitzpe_afek_matcher.py` |
-| מורדות כרמל | Not started — WAF blocks home IP | Run from office with `run_mordot_carmel.py` |
-
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
-& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_mitzpe_afek_matcher.py
-```
-
-### 4. ישובי הברון — find AJAX endpoint via browser DevTools, then build scraper
-
-Portal: `www.vaada-habaron.org.il/newengine/Pages/request2.aspx` (SharePoint 2013 + Ext.NET).
-Cities: זכרון יעקב (62 projects), אור עקיבא (45), בנימינה גבעת עדה (42), ג'סר א-זרקא.
-
-**Investigation done (sessions I + J):** SP REST API blocked, SOAP requires auth, data is JS-rendered.
-Page loads OK (200) with Ext.NET TreePanel configured in JS — static HTML has no AJAX URLs or
-store proxy config. No "browse all" in plain HTML. Search modes: permit number, gush number, meeting number.
-
-**Next step:** Open the site in Chrome, do a gush-number search in DevTools Network tab, find
-the actual AJAX POST that fetches the permit grid data. If it's a clean endpoint → build a
-`requests` scraper with gush enumeration per city. If not → Playwright.
-
-Gush numbers for target cities can be read from `docs/all_projects_08072026.xlsx` (column `גוש`
-on matched permits) or from govmap.
-
-### 5. New cities
-
-Current test cities are at report-review stage. Ready to add new Bartech or Complot cities when decided.
-
----
-
-## Soon
-
-### 4. Implement `scripts/fetch_projects.py` — Looker projects export
+### 1. Implement `scripts/fetch_projects.py` — Looker projects export
 
 Full spec in `docs/FETCH_PROJECTS_IMPLEMENTATION.md`. Automates the manual Looker export
 using the `looker-sdk` Python package. Fetches tile 2 ("Projects by each developer/architect/lawyer")
@@ -171,7 +120,50 @@ Credentials via `.env` file (`LOOKER_BASE_URL`, `LOOKER_CLIENT_ID`, `LOOKER_CLIE
 After implementing: add `looker-sdk` + `python-dotenv` to `requirements.txt`; do not yet wire into
 existing runner scripts.
 
-### 5. Full rescrape of Bat Yam (quarterly)
+### 2. Run ישובי הברון matcher (when scrape finishes)
+
+Scrape launched 2026-07-12 (~9,737 permits, ~90 min). Check if complete:
+```powershell
+Get-Content 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_yishuvei_habaron.txt' -Tail 3
+```
+Then run:
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
+& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_yishuvei_habaron_matcher.py
+```
+
+### 3. Review pending reports (with colleague)
+
+| Committee | Report | Key figures |
+|---|---|---|
+| קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review |
+| הראל | `outputs/harel_report.xlsx` | 5 status_advanced, 32 untracked |
+| זמורה | `outputs/zmora_report.xlsx` | 7 status_advanced, 70 untracked |
+| מיצפה אפק | `outputs/mitzpe_afek_report.xlsx` | 14 status_advanced, 33 untracked |
+| ישובי הברון | `outputs/yishuvei_habaron_report.xlsx` | TBD — run matcher first |
+
+Kiryat Ata `manual_review` events to watch: `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`.
+
+### 4. Classify Hadera unmapped stages + add to scraper
+
+Artifact: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
+Use search + bulk-ignore for fast triage. Export JSON, then add entries to
+`scrapers/bartech/api_scraper.py`:
+- `STAGE_TO_STATUS` dict: strings that map to a real milestone
+- `_UNMAPPED_STAGES` set: admin noise
+
+### 5. מורדות כרמל — run from office (WAF blocks home IP)
+
+```powershell
+$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
+& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_mordot_carmel.py
+```
+
+---
+
+## Soon
+
+### 6. Full rescrape of Bat Yam (quarterly)
 Current `bat_yam_fresh.csv` is from 2026-06-28 (scrape D). The `detail_block_lot` fix
 and permit number regex fix will only take effect in the next full scrape.
 Run quarterly to refresh the identity cache and pick up old permit ↔ new project linkages.

@@ -253,6 +253,28 @@ _COMPLOT = [
         'exclude': False,
         'exclude_reason': None,
     },
+    {
+        'committee_name': 'מורדות כרמל',
+        'cities_hebrew': ['טירת הכרמל', 'נשר'],
+        'scraper': 'complot',
+        'site_id': 61,
+        'base_url': None,
+        'permit_url_base': 'https://www.mordotcarmel.org/iturbakashot/#request/',
+        'include_bakasha_meqdamit': False,
+        'exclude': False,
+        'exclude_reason': None,
+    },
+    {
+        'committee_name': 'ישובי הברון',
+        'cities_hebrew': ['זכרון יעקב', 'אור עקיבא', 'בנימינה גבעת עדה', "ג'סר א זרקא"],
+        'scraper': 'complot',
+        'site_id': 14,
+        'base_url': None,
+        'permit_url_base': None,
+        'include_bakasha_meqdamit': False,
+        'exclude': False,
+        'exclude_reason': None,
+    },
 
     # North District
     {
@@ -710,6 +732,28 @@ _BARTECH = [
         'exclude_reason': None,
     },
     {
+        'committee_name': 'מיצפה אפק',
+        'cities_hebrew': ['באר יעקב'],
+        'scraper': 'bartech',
+        'site_id': None,
+        'base_url': 'https://www.vmm.co.il',
+        'permit_url_base': 'https://www.vmm.co.il/PermitApplicationDetails?Entity_Number=',
+        'include_bakasha_meqdamit': False,
+        'exclude': False,
+        'exclude_reason': None,
+    },
+    {
+        'committee_name': 'זמורה',
+        'cities_hebrew': ['מזכרת בתיה'],
+        'scraper': 'bartech',
+        'site_id': None,
+        'base_url': 'https://www.zmora.org.il',
+        'permit_url_base': 'https://www.zmora.org.il/PermitApplicationDetails?Entity_Number=',
+        'include_bakasha_meqdamit': False,
+        'exclude': False,
+        'exclude_reason': None,
+    },
+    {
         'committee_name': 'נתניה',
         'cities_hebrew': ['נתניה'],
         'scraper': 'bartech',
@@ -719,6 +763,19 @@ _BARTECH = [
         'include_bakasha_meqdamit': False,
         'exclude': True,
         'exclude_reason': 'url_unverified',  # non-standard bartech URL, needs testing
+    },
+
+    # Jerusalem District
+    {
+        'committee_name': 'הראל',
+        'cities_hebrew': ['מבשרת ציון'],
+        'scraper': 'bartech',
+        'site_id': None,
+        'base_url': 'https://www.v-harel.co.il',
+        'permit_url_base': 'https://www.v-harel.co.il/PermitApplicationDetails?Entity_Number=',
+        'include_bakasha_meqdamit': False,
+        'exclude': False,
+        'exclude_reason': None,
     },
 
     # Haifa District
@@ -900,6 +957,7 @@ _EXCLUDED = [
         'exclude_reason': 'proprietary',
     },
 
+
     # Cities in projects file without a known scraper
     # Grouped as a convenience; each city is its own logical entry here.
     {
@@ -917,12 +975,6 @@ _EXCLUDED = [
     {
         'committee_name': 'אום אל-פחם',
         'cities_hebrew': ['אום אל-פחם'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
-        'committee_name': 'אור עקיבא',
-        'cities_hebrew': ['אור עקיבא'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
@@ -981,12 +1033,6 @@ _EXCLUDED = [
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
     {
-        'committee_name': 'באר יעקב',
-        'cities_hebrew': ['באר יעקב'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
         'committee_name': 'בית אל',
         'cities_hebrew': ['בית אל'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
@@ -1011,20 +1057,8 @@ _EXCLUDED = [
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
     {
-        'committee_name': 'בנימינה גבעת עדה',
-        'cities_hebrew': ['בנימינה גבעת עדה'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
         'committee_name': 'בת חפר',
         'cities_hebrew': ['בת חפר'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
-        'committee_name': "ג'סר א זרקא",
-        'cities_hebrew': ["ג'סר א זרקא"],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
@@ -1071,12 +1105,6 @@ _EXCLUDED = [
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
     {
-        'committee_name': 'זכרון יעקב',
-        'cities_hebrew': ['זכרון יעקב'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
         'committee_name': 'חצור הגלילית',
         'cities_hebrew': ['חצור הגלילית'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
@@ -1091,12 +1119,6 @@ _EXCLUDED = [
     {
         'committee_name': 'טורעאן',
         'cities_hebrew': ['טורעאן'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
-        'committee_name': 'טירת הכרמל',
-        'cities_hebrew': ['טירת הכרמל'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
@@ -1179,12 +1201,6 @@ _EXCLUDED = [
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
     {
-        'committee_name': 'מבשרת ציון',
-        'cities_hebrew': ['מבשרת ציון'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
         'committee_name': 'מגדל',
         'cities_hebrew': ['מגדל'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
@@ -1199,12 +1215,6 @@ _EXCLUDED = [
     {
         'committee_name': 'מוצא עילית',
         'cities_hebrew': ['מוצא עילית'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
-        'committee_name': 'מזכרת בתיה',
-        'cities_hebrew': ['מזכרת בתיה'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },
@@ -1247,12 +1257,6 @@ _EXCLUDED = [
     {
         'committee_name': 'ניר אליהו',
         'cities_hebrew': ['ניר אליהו'],
-        'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
-        'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
-    },
-    {
-        'committee_name': 'נשר',
-        'cities_hebrew': ['נשר'],
         'scraper': None, 'site_id': None, 'base_url': None, 'permit_url_base': None,
         'include_bakasha_meqdamit': False, 'exclude': True, 'exclude_reason': 'no_scraper',
     },

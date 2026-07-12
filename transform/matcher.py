@@ -405,6 +405,7 @@ def run(
     excluded_categories: Optional[set] = None,
     matched_cache_path: Optional[str] = None,
     permit_url_base: Optional[str] = None,
+    city_filter: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     Load projects and permits files, run matching, write flagged report to output_path.
@@ -436,6 +437,11 @@ def run(
     # Normalise column names (strip whitespace)
     projects_df.columns = [c.strip() for c in projects_df.columns]
     permits_df.columns = [c.strip() for c in permits_df.columns]
+
+    if city_filter:
+        before = len(projects_df)
+        projects_df = projects_df[projects_df['עיר'].isin(city_filter)]
+        print(f'[INFO] city_filter={city_filter}: {before} -> {len(projects_df)} projects')
 
     # Auto-compute min_year from projects file if not explicitly provided
     if min_year is None:
@@ -518,7 +524,7 @@ def run(
         # 2. Address fallback
         if matched_idx is None:
             for idx, proj_row in projects_df.iterrows():
-                if am.match(proj_row.get('שם פרויקט', ''), permit.get('full_address', ''), city_hebrew) \
+                if am.match(proj_row.get('שם פרויקט', ''), permit.get('full_address', ''), proj_row.get('עיר', city_hebrew)) \
                         and _is_temporally_plausible(permit, proj_row):
                     matched_idx = idx
                     match_method = 'address'
