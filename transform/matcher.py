@@ -710,6 +710,7 @@ def _make_row(
 ) -> dict:
     return {
         'flag':               flag,
+        'city':               str(proj['עיר']) if proj is not None else '',
         'project_id':         str(proj['מזהה פרויקט']) if proj is not None else '',
         'project_name':       str(proj['שם פרויקט']) if proj is not None else '',
         'project_sug_bnia':   _clean(proj.get('סוג בנייה', '')) if proj is not None else '',

@@ -1,12 +1,109 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-12 (Session K)
+**Last Updated:** 2026-07-15 (Session Q)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session Q — 2026-07-15
+
+- **New immediate next step added**: build custom crawlers for the 4 active-but-excluded
+  committees that run neither Complot nor Bartech (נתניה, תל אביב יפו, ירושלים, קצרין) — see
+  "Immediate — Do First Next Session" #3. נתניה has a known URL to probe first; the other three
+  need pure system-identification recon before any scraper design.
+
+### Session P — 2026-07-13
+
+- **V2 consolidated report runner built** (`scripts/run_all_committees.py`) — loops a declarative
+  `COMMITTEE_CONFIGS` list, calls `transform.matcher.run()` per committee, merges results with a
+  `committee` column, sorts by committee then flag priority, writes `outputs/consolidated_report.xlsx`.
+  Skips (and logs) any committee whose `fresh.csv` doesn't exist yet rather than failing.
+  **Verified working**: first run produced 293 rows across 6 committees (חדרה, הראל, זמורה,
+  מיצפה אפק, ישובי הברון, מורדות כרמל) — matches each committee's individual matcher output exactly.
+  Bat Yam / Holon / Kiryat Ata / Krayot / Ramat Gan are **not yet in `COMMITTEE_CONFIGS`** — no
+  dedicated `run_*_matcher.py` script exists for them to copy exact params from (city_filter,
+  permit_url_base); add once confirmed rather than guessing (see V2 item in "Later" section).
+- **Nationwide projects export re-confirmed sufficient for V2** — `docs/all_projects_08072026.xlsx`
+  (from Session L/M's `fetch_projects.py` + Looker MCP workflow) is already the shared input across
+  all 6 configured committees. Manual export step, but functionally unblocks V2 prerequisite #2.
+- **`city` column added to consolidated report** — `transform/matcher.py:_make_row()` now includes
+  `proj['עיר']` when a project matched. `run_all_committees.py` backfills blanks for single-city
+  committees (unambiguous); multi-city committees (מורדות כרמל, ישובי הברון) only get a real city on
+  matched rows — untracked rows stay blank rather than parsing it from `full_address`, since scraped
+  address text uses inconsistent city spelling/hyphenation (e.g. `זכרון-יעקב` vs `זכרון יעקב`) and can
+  include neighboring cities outside the committee's own list (e.g. a מורדות כרמל untracked permit at
+  `רכסים`, not one of the two configured cities). `committee`/`city`/`flag` moved to the front of the
+  column order for filtering.
+
+### Session O — 2026-07-13
+
+- **מורדות כרמל scrape completed** — `outputs/mordot_carmel_fresh.csv`: 18,540 permits (started ~09:29,
+  finished ~14:44). 138 unique event strings seen total across the full run (up from ~80 mid-scrape).
+- **Complot triage artifact rebuilt** to match the Bartech/Hadera design: table layout with count
+  column + sort toggle, per-row colored `<select>`, localStorage persistence, "Unset only" filter,
+  search, bulk-ignore, Python export (only genuinely new classifications, not re-exporting existing
+  presets). Added a "Hand off to next person" / "Continue from handoff" pair so multiple colleagues
+  can classify sequentially across separate browsers/devices (localStorage doesn't sync between
+  people, so state must be passed explicitly). Link: shared separately with colleagues.
+- **מורדות כרמל matcher run** — `outputs/mordot_carmel_report.xlsx`: 10 status_advanced, 16 untracked,
+  2 manual_review, 0 new_permit (108 projects in טירת הכרמל + נשר after city_filter; min_year=2015
+  auto-computed; cache: `outputs/mordot_carmel_matched_cache.json`, 5040 permits).
+- **Note**: matcher was run before the 2 known-unclassified events (`מסירת אישור הרצת מערכות`,
+  `הפקת אישור הרצת מערכות`, ~26/23 occurrences) and ~110 other unmapped events were triaged — those
+  events currently fall through to `_UNMAPPED_EVENTS`-equivalent (no status contribution) since
+  they're absent from `EVENT_TO_STATUS`. If colleague triage later reclassifies any of them to a
+  real status, **re-run the matcher** — some `untracked`/`manual_review` rows may reclassify as
+  `status_advanced`.
+
+### Session N — 2026-07-13
+
+- **`min_year` support added to Complot scraper** (`scrapers/complot/api_scraper.py`) — new `min_year`
+  parameter on `ComplotPermitsAPI.__init__`; new `_passes_min_year()` method; `scrape()` now filters
+  the permit list before the detail-fetch phase. Previously, `min_year` was computed but silently
+  discarded (no parameter existed), causing full 2011–present scrapes.
+- **`scripts/run_mordot_carmel.py` updated** — now passes `min_year=min_year` to `ComplotPermitsAPI`.
+- **מורדות כרמל scrape relaunched** from office (site_id=61, min_year=2015). List phase: 20,098 unique
+  permits → 18,540 after year filter. Detail phase running as of end of session (~09:30 start).
+- **Complot api_scraper.py updated** from mordot carmel scrape events:
+  - 3 new `EVENT_TO_STATUS` entries: `חתימת היתר` → `'היתר'`; `הפקת היתר בניה` → `'היתר בתנאים'`;
+    `שיבוץ לישיבת ועדה` → `'בקשה להיתר'`
+  - 17 new `_UNMAPPED_EVENTS` entries (mordot carmel block): `בדיקה לשחרור ערבות`, `פתיחת ערבות`,
+    `סיום ושחרור ערבות`, `דוח מפקח`, `דיווח מפקח בשלבי בניה`, `דו"ח פיקוח לפני וועדה`,
+    `דו"ח ביקור לטופס 4`, `העברת נתונים לשמאי לעריכת שומה`, `החזרת התיק משמאי`,
+    `השלמת דרישות בקרת תכן`, `אי השלמת דרישות בקרת תכן`, `המתנה לתיקון תכנית אצל העורך`,
+    `הגשת הבקשה מחדש`, `העברת תכנית לפיקוח`, `שיבוץ לישיבת מליאה`, `הודעה על פרסום הקלה`
+  - 2 new events seen mid-scrape, **not yet classified**: `מסירת אישור הרצת מערכות`,
+    `הפקת אישור הרצת מערכות`
+- **Complot triage artifact started** — first version built but wrong design (paste-log, button-row).
+  Bartech artifact fetched and reviewed. Rebuild needed: table layout, per-row dropdown,
+  localStorage persistence, bulk-ignore, pre-loaded events. **Not complete.**
+
+### Session M — 2026-07-13
+
+- **`scripts/fetch_projects.py` implemented and working** — Looker export pipeline complete.
+  Looker API key access not available; workflow uses Claude Desktop Looker MCP to export CSV,
+  then `fetch_projects.py --from-csv` to convert to Hebrew-column xlsx.
+  Column rename map (29 Looker dot-notation → Hebrew) baked into the script.
+  SDK mode (`init40()`) also implemented for when API keys are available.
+  Output verified: 45,496 rows, 23,240 unique projects — matches old file city-by-city.
+  Output: `outputs/madlan_projects_fresh.xlsx`
+- **ישובי הברון matcher complete** — `outputs/yishuvei_habaron_report.xlsx`: 2 status_advanced, 49 untracked, 0 manual_review; cache: `outputs/yishuvei_habaron_matched_cache.json` (455 permits). 9737 permits scraped across זכרון יעקב, אור עקיבא, בנימינה גבעת עדה, ג'סר א-זרקא.
+- **Complot api_scraper.py updated** — 7 new `EVENT_TO_STATUS` entries: `תעודת גמר`, `הפקת טופס 4 מותלה`, `הפקת טופס 4 להרצת מערכות`, `הפקת טופס נלווה לטופס 4` → `'טופס 4'`; `חתימת היתר בניה`, `הפקת אישור תחילת עבודות`, `אישור המפקח לתחילת עבודות` → `'היתר'`. ~80 new `_UNMAPPED_EVENTS` entries from full yishuvei_habaron scrape.
+
+### Session L — 2026-07-12
+
+- **`scripts/fetch_projects.py` implemented and working** — Looker export pipeline complete.
+  Looker API key access not available; workflow uses Claude Desktop Looker MCP to export CSV,
+  then `fetch_projects.py --from-csv` to convert to Hebrew-column xlsx.
+  Column rename map (29 Looker dot-notation → Hebrew) baked into the script.
+  SDK mode (`init40()`) also implemented for when API keys are available.
+  Output verified: 45,496 rows, 23,240 unique projects — matches old file city-by-city.
+  Output: `outputs/madlan_projects_fresh.xlsx`
+- **ישובי הברון matcher complete** — `outputs/yishuvei_habaron_report.xlsx`: 2 status_advanced, 49 untracked, 0 manual_review; cache: `outputs/yishuvei_habaron_matched_cache.json` (455 permits). 9737 permits scraped across זכרון יעקב, אור עקיבא, בנימינה גבעת עדה, ג'סר א-זרקא.
+- **Complot api_scraper.py updated** — 7 new `EVENT_TO_STATUS` entries: `תעודת גמר`, `הפקת טופס 4 מותלה`, `הפקת טופס 4 להרצת מערכות`, `הפקת טופס נלווה לטופס 4` → `'טופס 4'`; `חתימת היתר בניה`, `הפקת אישור תחילת עבודות`, `אישור המפקח לתחילת עבודות` → `'היתר'`. ~80 new `_UNMAPPED_EVENTS` entries from full yishuvei_habaron scrape.
 
 ### Session K — 2026-07-12
 
@@ -111,53 +208,68 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Implement `scripts/fetch_projects.py` — Looker projects export
+### 1. Complot triage artifact — colleagues to finish classifying
 
-Full spec in `docs/FETCH_PROJECTS_IMPLEMENTATION.md`. Automates the manual Looker export
-using the `looker-sdk` Python package. Fetches tile 2 ("Projects by each developer/architect/lawyer")
-from dashboard 724 at `localize.eu.looker.com`, writes to `outputs/madlan_projects_fresh.xlsx`.
-Credentials via `.env` file (`LOOKER_BASE_URL`, `LOOKER_CLIENT_ID`, `LOOKER_CLIENT_SECRET`).
-After implementing: add `looker-sdk` + `python-dotenv` to `requirements.txt`; do not yet wire into
-existing runner scripts.
+Rebuilt to match the Bartech/Hadera design (table + dropdown + localStorage + search + bulk-ignore),
+plus a handoff mechanism ("Hand off to next person" / "Continue from handoff" — copies/pastes a JSON
+code so progress carries across colleagues' separate browsers, since localStorage doesn't sync
+between people). Link shared with colleagues directly (not stored here since it's colleague-private).
 
-### 2. Run ישובי הברון matcher (when scrape finishes)
+**138 unique events total**, only 22 pre-classified. ~116 still need triage, including the 2 flagged
+last session:
+- `מסירת אישור הרצת מערכות` (23 occurrences) — likely `היתר`
+- `הפקת אישור הרצת מערכות` (26 occurrences) — likely `היתר`
 
-Scrape launched 2026-07-12 (~9,737 permits, ~90 min). Check if complete:
-```powershell
-Get-Content 'c:\R_PROJECTS\Project_update_scraper\outputs\scrape_log_yishuvei_habaron.txt' -Tail 3
-```
-Then run:
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
-& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_yishuvei_habaron_matcher.py
-```
+Once classification is done, get the final Python export from whoever finishes and paste the new
+`EVENT_TO_STATUS` / `_UNMAPPED_EVENTS` / `_MANUAL_REVIEW_EVENTS` entries into
+`scrapers/complot/api_scraper.py`, then **re-run the mordot carmel matcher** — the report below was
+generated with only 22/138 events classified, so some `untracked`/`manual_review` rows may reclassify
+to `status_advanced` once the rest are triaged.
 
-### 3. Review pending reports (with colleague)
+### 3. Build custom crawlers for non-Complot/Bartech committees
+
+4 active-but-excluded committees have a real portal but run neither Complot nor Bartech
+(`config/committees.py`, `exclude_reason` in `proprietary`/`url_unverified`):
+
+| Committee | Reason | URL / notes |
+|---|---|---|
+| נתניה | `url_unverified` | `https://vaadnet.netanyagis.co.il` — has a known URL, not yet probed |
+| תל אביב יפו | `proprietary` | system unknown — needs investigation before any scraper design |
+| ירושלים | `proprietary` | system unknown — needs investigation before any scraper design |
+| קצרין | `proprietary` | system unknown — needs investigation before any scraper design |
+
+Start with נתניה — it already has a candidate URL, so the cheapest next step is the same
+probe-first approach used for ישובי הברון (Session K): check if the page is server-rendered
+HTML (`requests` + BeautifulSoup viable) or JS-rendered (needs Chrome DevTools inspection for
+the underlying AJAX/API endpoint, or Playwright as fallback). ישובי הברון looked like a dead
+end (SharePoint + Ext.NET) until the endpoint turned out to be a disguised Complot site
+(site_id=14) — always check for a Complot/Bartech signature in network requests before
+building a bespoke scraper.
+
+For תל אביב יפו / ירושלים / קצרין, the system isn't identified yet at all — first session on
+each should be pure reconnaissance (view-source, network tab, robots.txt) with no scraper code
+written until the actual data-access mechanism is confirmed.
+
+### 4. Review pending reports (with colleague)
 
 | Committee | Report | Key figures |
 |---|---|---|
+| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — **run with only 22/138 events classified, re-run after triage completes** |
 | קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review |
 | הראל | `outputs/harel_report.xlsx` | 5 status_advanced, 32 untracked |
 | זמורה | `outputs/zmora_report.xlsx` | 7 status_advanced, 70 untracked |
 | מיצפה אפק | `outputs/mitzpe_afek_report.xlsx` | 14 status_advanced, 33 untracked |
-| ישובי הברון | `outputs/yishuvei_habaron_report.xlsx` | TBD — run matcher first |
+| ישובי הברון | `outputs/yishuvei_habaron_report.xlsx` | 2 status_advanced, 49 untracked |
 
 Kiryat Ata `manual_review` events to watch: `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`.
 
-### 4. Classify Hadera unmapped stages + add to scraper
+### 5. Classify Hadera unmapped stages + add to scraper
 
 Artifact: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
 Use search + bulk-ignore for fast triage. Export JSON, then add entries to
 `scrapers/bartech/api_scraper.py`:
 - `STAGE_TO_STATUS` dict: strings that map to a real milestone
 - `_UNMAPPED_STAGES` set: admin noise
-
-### 5. מורדות כרמל — run from office (WAF blocks home IP)
-
-```powershell
-$env:PYTHONPATH = 'c:\R_PROJECTS\Project_update_scraper'; $env:PYTHONUTF8 = '1'
-& 'C:\Users\Rotem\AppData\Local\Programs\Python\Python313\python.exe' scripts\run_mordot_carmel.py
-```
 
 ---
 
@@ -189,17 +301,18 @@ No further action needed unless new event types surface in future scrapes.
 - **Incremental mode for regular runs** — refresh all cached-matched permits + scan the last
   N days of new submissions per city (the matched-cache + `scrape_targeted` pattern already
   exists for Bat Yam). Full scrapes drop to quarterly per city.
-- **Nation-wide projects export** — a single export covering all tracked municipalities replaces
-  per-city Excel files. Either automated via backoffice API (see item 4) or a scheduled manual
-  export before each report run.
-- **Single consolidated report** — one Excel file across all committees, with a `committee`
-  column, sorted by committee then by flag priority (`status_advanced` → `new_permit` →
-  `untracked` → `manual_review`). The top-level runner calls each city's `matcher.run()`,
-  concatenates the returned DataFrames, and writes the merged file.
+- **Nation-wide projects export** — ✅ done (Session P) — `docs/all_projects_08072026.xlsx` via
+  `fetch_projects.py` + Looker MCP is already the shared input. Still a manual export step, not
+  API-automated (see item 9), but functionally satisfies this prerequisite.
+- **Single consolidated report** — ✅ built (Session P) — `scripts/run_all_committees.py`. One
+  Excel file across configured committees, `committee` column, sorted by committee then flag
+  priority. Currently covers 6 of ~11 scraped committees (see Session P note); add
+  Bat Yam/Holon/Kiryat Ata/Krayot/Ramat Gan once their exact matcher params are confirmed.
 
-**Blocking prerequisites before V2:**
-1. All per-system scraper/matcher procedures finalised and stable (Complot + Bartech).
-2. Nation-wide projects export confirmed (API or scheduled manual — still being investigated).
+**Remaining blocking prerequisite before full V2:**
+1. All per-system scraper/matcher procedures finalised and stable (Complot + Bartech) — ~66 of
+   77 active committees in `config/committees.py` still have no scrape at all. This is the real
+   bottleneck; the runner/export infra is no longer blocking.
 
 ### 9. V2 — automatic backoffice writes
 After the manual-review cycle is validated:
@@ -222,7 +335,10 @@ After the manual-review cycle is validated:
 | `scripts/run_kiryat_ata.py` | Kiryat Ata (Complot, site_id=32) — needs office IP |
 | `scripts/run_holon.py` | Holon (Bartech) full scrape runner — min_year auto-computed |
 | `scripts/run_krayot.py` | Krayot (Bartech, vkrayot.co.il) — min_year auto-computed from projects file |
-| `transform/matcher.py` | Matching + report; `_pick_best_candidate()` for multi-project parcels |
+| `transform/matcher.py` | Matching + report; `_pick_best_candidate()` for multi-project parcels; `run()` returns `report_df` |
+| `scripts/run_all_committees.py` | V2 consolidated runner — loops `COMMITTEE_CONFIGS`, merges into `outputs/consolidated_report.xlsx` |
+| `docs/all_projects_08072026.xlsx` | Nationwide Madlan projects export (Looker MCP) — shared input across all configured committees |
+| `outputs/consolidated_report.xlsx` | Merged multi-committee report — 293 rows / 6 committees as of Session P |
 | `transform/gush_helka.py` | Gush-helka parsing and set-intersection |
 | `transform/address_match.py` | Address normalization and range matching |
 | `docs/bat_yam.xlsx` | Madlan projects export for Bat Yam (601 rows) |

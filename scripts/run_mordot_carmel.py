@@ -29,6 +29,7 @@ print(f'[INFO] min_year={min_year} (auto-computed from {projects_path}, cities={
 scraper = ComplotPermitsAPI(
     site_id=61,
     city_name_hebrew='מורדות כרמל',
+    min_year=min_year,
 )
 scraper.max_requests = None  # set to int for testing
 
