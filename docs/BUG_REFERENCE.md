@@ -1,6 +1,69 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-08
+**Last Updated:** 2026-07-15
+
+---
+
+## BUG-018 — Tel Aviv scraper: reCAPTCHA gateway rejection mis-counted as a genuine "not found"
+
+**Severity:** High — would silently truncate `scan_license_range()` at a false ceiling  
+**Fixed in:** Session R (2026-07-15)  
+**File:** `scrapers/tel_aviv/scraper.py` → `_parse_response()`, `_query()`
+
+### Root cause
+
+A `400 Invalid assertion` / `400 Missing assertion` response (the reCAPTCHA Enterprise gateway
+rejecting the request) was parsed identically to a genuine `200` response with an empty results
+array. Both fed into the scan loop's `consecutive_misses` counter, so a run of gateway rejections
+(confirmed live: adaptive rate-limiting kicked in after only 1-2 successful queries in a tight
+loop) looked exactly like a run of real "no permit at this number" results — the scan would stop
+at a false ceiling, silently under-reporting real data, not because the numbers didn't exist but
+because the requests were never actually checked.
+
+### Fix
+
+`_parse_response()` now returns a 3-way outcome — `'ok'` (genuine response, `records` may
+legitimately be empty), `'blocked'` (gateway rejection), or `'error'` (anything else malformed).
+`_query()` retries `'blocked'`/`'error'` outcomes with scaling backoff (30-75s × attempt, up to 3
+tries) and only ever returns `'ok'` (real data) or gives up with an explicit `[GIVE UP]` log line
+— callers must never treat a give-up as a confirmed miss.
+
+### When adding a scraper behind bot-defense (CAPTCHA, WAF, rate limiting)
+
+Any query that can fail for a reason unrelated to "does this record exist" (auth/gateway
+rejection, transient 5xx, timeout) must be classified separately from a genuine empty result.
+Feeding a rejection into the same miss-counter used for real "not found" detection produces a
+false stopping point that looks like clean success.
+
+---
+
+## BUG-017 — Tel Aviv scraper: filling form fields before Angular's reactive form finished initializing
+
+**Severity:** High — every query silently searched with default `0` values instead of the real input  
+**Fixed in:** Session R (2026-07-15), caught by Rotem watching the live non-headless browser  
+**File:** `scrapers/tel_aviv/scraper.py` → `_load_search_form()`, `_fill_field()`
+
+### Root cause
+
+Waiting for a form field's DOM *presence* (`EC.presence_of_element_located`) is not the same as
+Angular's reactive `FormGroup` having finished wiring/default-populating that field. Filling
+immediately after presence either landed before the binding existed or was silently overwritten
+back to `"0"` by Angular's own init logic shortly after — confirmed by direct visual observation
+of the field staying at `"0"` despite `send_keys()` appearing to succeed with no exception.
+
+### Fix
+
+Added a settle delay after the presence wait in `_load_search_form()`, and made `_fill_field()`
+verify the field's actual value after filling, falling back to a direct `.value` assignment +
+manual `input`/`change` event dispatch (what Angular's `matInput` listens on) if `send_keys()`
+didn't stick — then raising loudly if it still doesn't take, rather than silently submitting a
+wrong value.
+
+### When automating a form on a reactive framework (Angular/React/Vue)
+
+Element presence in the DOM is not a proxy for "the framework has finished binding this element."
+Always verify the field's value after filling, not just that the fill call didn't throw —
+especially right after a navigation/route change.
 
 ---
 

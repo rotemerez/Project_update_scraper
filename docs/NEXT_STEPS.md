@@ -1,12 +1,29 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-15 (Session Q)
+**Last Updated:** 2026-07-15 (Session R)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session R — 2026-07-15
+
+- **נתניה confirmed Bartech** via live recon (`g-recaptcha-response=x` dummy-token trick works
+  here too) — `BartechPermitsAPI` needs no new code, just wiring (`config/committees.py` +
+  `scripts/run_netanya.py`, not started).
+- **תל אביב יפו fully reverse-engineered and a working scraper built** —
+  `scrapers/tel_aviv/scraper.py` (browser-automation, drives the real search UI since reCAPTCHA
+  Enterprise v3 is gateway-enforced and can't be bypassed with a placeholder), plus
+  `scripts/run_tel_aviv.py` / `run_tel_aviv_matcher.py`. See "Immediate — Do First Next Session"
+  #3 for full detail — race-condition and blocked-vs-miss bugs found and fixed via live browser
+  observation with Rotem watching the non-headless window, adaptive rate-limiting from reCAPTCHA
+  Enterprise confirmed empirically and mitigated (in-app "חיפוש חדש" navigation instead of full
+  reloads, longer backoff). **Live validation deferred to next session** — code is written and
+  syntax-checked but not yet proven stable over a longer real run.
+- Docs added: `docs/tlv_permit_api_findings.md`, `docs/tlv_permit_api_findings2.md` (Tel Aviv API
+  recon, via Claude Desktop browser instrumentation).
 
 ### Session Q — 2026-07-15
 
@@ -233,22 +250,202 @@ to `status_advanced` once the rest are triaged.
 
 | Committee | Reason | URL / notes |
 |---|---|---|
-| נתניה | `url_unverified` | `https://vaadnet.netanyagis.co.il` — has a known URL, not yet probed |
-| תל אביב יפו | `proprietary` | system unknown — needs investigation before any scraper design |
+| נתניה | `url_unverified` — **RESOLVED, confirmed Bartech** | `https://vaadnet.netanyagis.co.il` — see below |
+| תל אביב יפו | `proprietary` — **partial recon done (2026-07-15)** | system identified, API host not yet confirmed — see below |
 | ירושלים | `proprietary` | system unknown — needs investigation before any scraper design |
 | קצרין | `proprietary` | system unknown — needs investigation before any scraper design |
 
-Start with נתניה — it already has a candidate URL, so the cheapest next step is the same
-probe-first approach used for ישובי הברון (Session K): check if the page is server-rendered
-HTML (`requests` + BeautifulSoup viable) or JS-rendered (needs Chrome DevTools inspection for
-the underlying AJAX/API endpoint, or Playwright as fallback). ישובי הברון looked like a dead
-end (SharePoint + Ext.NET) until the endpoint turned out to be a disguised Complot site
-(site_id=14) — always check for a Complot/Bartech signature in network requests before
-building a bespoke scraper.
+**נתניה confirmed Bartech (2026-07-15 recon)** — same signature as v-harel/zmora/vmm/Holon/Krayot:
+- Search page `/SearchPermitApplication` → results `/SearchPermitApplicationResults/` → detail
+  `/PermitApplicationDetails?Definement_Entity_Type=...&Entity_Type=P&Entity_Number=...` — exact
+  match to `scrapers/bartech/api_scraper.py`'s `RESULTS_PATH`/`DETAIL_PATH` constants and referer path.
+- Results table columns identical to existing Bartech parser: מספר בקשה, מספר תיק בניין, סטטוס,
+  כתובת, מקרקעין (גוש/חלקה/מגרש), שם המבקש, תאור הבקשה.
+- **reCAPTCHA v2 on results endpoint is not strictly enforced server-side** — a plain `requests` GET
+  with `g-recaptcha-response=x` (the same dummy-token trick `_fetch_parcel_page()` already uses)
+  returns real live data, e.g. permit `1/20260495`, גוש 8005 חלקה 1 מגרש 123, applicant
+  "גינדי ישראל 2010 בע״מ", opened 14/07/2026. A bare GET with no `g-recaptcha-response` param at
+  all is rejected with a captcha-error page ("אופס... חלה שגיאה בעת ביצוע הפניה").
+- Debug snapshots: `outputs/debug_netanya_search.html` (search form),
+  `outputs/debug_netanya_results.html` (captcha-error response, no token param),
+  `outputs/debug_netanya_results2.html` (real data, dummy token param).
+- **No new scraper code needed** — `BartechPermitsAPI` should work unchanged with
+  `base_url='https://vaadnet.netanyagis.co.il'`. Remaining work (not started yet): move נתניה from
+  `_EXCLUDED` to the active Bartech list in `config/committees.py`, build
+  `scripts/run_netanya.py` following the `run_harel.py` pattern, confirm `min_year`/pagination
+  against the live site, smoke-test before a full scrape.
 
-For תל אביב יפו / ירושלים / קצרין, the system isn't identified yet at all — first session on
-each should be pure reconnaissance (view-source, network tab, robots.txt) with no scraper code
-written until the actual data-access mechanism is confirmed.
+For ירושלים / קצרין, the system isn't identified yet at all — first session on each should be
+pure reconnaissance (view-source, network tab, robots.txt) with no scraper code written until
+the actual data-access mechanism is confirmed. ישובי הברון (Session K) and נתניה both turned out
+to be disguised Complot/Bartech instances despite looking custom at first glance — always check
+for that signature in network requests before assuming a bespoke scraper is required.
+
+**תל אביב יפו — two separate source sites, per Rotem (2026-07-15):**
+- **`https://rishuybniya.tel-aviv.gov.il/resident-licensing/licensing-request-pages/request-search`**
+  — covers the request lifecycle from טרום בקשה through היתר. This is the one probed this session
+  (see below).
+- **`https://handasa.tel-aviv.gov.il/pages/default.aspx`** — covers בדיקת אכלוס (occupancy check),
+  a separate stage/system. **Deliberately deferred — not investigated yet, deal with later.**
+
+**רישוי בנייה מקוון (`rishuybniya.tel-aviv.gov.il`) recon — FULL findings (2026-07-15):**
+
+Static bundle analysis (this session, CLI-only) confirmed it's **not Complot or Bartech** — a
+bespoke Angular (Universal SSR) SPA over a custom .NET REST API — but couldn't resolve the live
+API host (injected at runtime, not hardcoded in delivered JS/HTML). Live browser instrumentation
+via Claude Desktop (XHR interception) then confirmed everything else. Full writeup:
+**`docs/tlv_permit_api_findings.md`**.
+
+Key facts:
+- **API host**: `https://apimtlvprd.tel-aviv.gov.il`, paths under `/prd/RishuiBniyaWeb/publicApi`
+  (public search) vs `/prd/RishuiBniyaWeb/api` (Azure B2C-authenticated).
+- **Search endpoint**: `POST .../publicApi/ResidentLicensing/Request/getRequest` — body is 7
+  fixed fields (`submissionId`, `licenseId`, `streetCode`, `houseNumber`, `entrance`,
+  `blockNumber`, `parcelNumber`); 0/null means "don't filter on this."
+- **reCAPTCHA Enterprise v3 is gateway-enforced, not just client-side** — verified: missing token
+  → `400 Missing assertion`; fake token → `400 Invalid assertion`. Required header:
+  `X-Client-Assertion: <token>`, tokens expire ~2 min, one per request. Unlike Netanya's Bartech
+  v2 (which accepted a dummy value), **this cannot be bypassed with a placeholder** — a working
+  scraper would need a real browser context (e.g. Playwright driving `grecaptcha.enterprise.execute()`)
+  to mint fresh tokens per request, which is a meaningfully heavier lift than any committee done so far.
+- **Permit detail pages require full Azure B2C login** (MSAL/OAuth2 PKCE redirect) — not
+  reachable by an unauthenticated scraper at all; direct API calls return `401`.
+- **Street code lookup** (`GET .../publicApi/Address/SearchTlvStreets/{name}`) has no auth —
+  usable to resolve `streetCode` for address-based search.
+- **Backend confirmed working (Session 2 follow-up, 2026-07-15)** — the Session 1 "outage" was
+  **not a real outage**: the Nativ backend throws its 500 whenever `entrance` is sent as `null`
+  instead of `""`. Angular's own requests always send `""`, which is why the one real XHR
+  captured in Session 1 happened to succeed. **Always send `entrance: ""`, never `null`.**
+- **Confirmed real response schema** (`data` field, two sub-arrays):
+  - `data.residentLicenseRequest` — building permit records: `requestId` (int, internal DB id),
+    `dataNumber` (string, `"YY-NNNNN"`), `submissionStr` (string, secondary numeric ref),
+    `licenseNumber` (string, display permit number `"YY-NNNN"`), `requestType`, `address`,
+    `requestStatus`, `link` (always `"לפרטי הבקשה"`).
+  - `data.requestDataList` — information/online-submission records: same `requestId`/`dataNumber`
+    (empty)/`requestType`/`address`/`requestStatus`, no `licenseNumber`/`submissionStr`/`link`.
+- **Permit number format confirmed**: `licenseId` in the request body = `20` + 2-digit year +
+  4-digit zero-padded sequence (e.g. `20260624`), maps to display `licenseNumber` `"26-0624"`.
+  **Sequence is mostly but not perfectly consecutive** — gaps exist (e.g. 625/626 missing while
+  620–624 present) — a scraper must use a consecutive-miss threshold (e.g. 20+ in a row) to detect
+  the true ceiling, not stop at the first gap. **Current ceiling as of 2026-07-15: `licenseId
+  20260624` / `26-0624`** — ~620 permits issued in Tel Aviv in the first ~6.5 months of 2026
+  (~95/month).
+- Full writeup with the permit-number scan table: `docs/tlv_permit_api_findings2.md`.
+- **Second Tel Aviv site (deferred, per Rotem 2026-07-15)**: `https://handasa.tel-aviv.gov.il/pages/default.aspx`
+  covers בדיקת אכלוס (occupancy check) — separate stage, separate system, not investigated yet.
+
+**Assessment**: fully scrapable — search endpoint, street lookup, response schema, and permit
+numbering scheme are all confirmed working with real data (Session 2, 2026-07-15). The only
+remaining structural obstacle is the mandatory per-request reCAPTCHA Enterprise token, which
+means it needs a headless-browser component to mint tokens, not a plain `requests`-based scraper
+like every other committee so far. Real step up in complexity/cost vs. Complot/Bartech, but no
+longer blocked on unknowns — ready for scraper design once prioritized. No scraper code written yet.
+
+**Complexity analysis + candidate solutions (2026-07-15):**
+
+Two independent hard sub-problems, not one:
+
+1. **Token minting is mandatory and server-verified** (not a client-side-only nicety like
+   Netanya's v2). A real `grecaptcha.enterprise.execute()` call is required per search; tokens
+   expire in ~2 min. Options considered:
+   - **Drive the real page with a browser (recommended)** — Selenium / `undetected-chromedriver`
+     (already project dependencies, already used for the legacy browser-based
+     `scrapers/complot/scraper.py` before it was replaced by the faster Complot API approach).
+     Load the search page, fill gush/helka or address fields, click search, let Angular's own JS
+     mint the token and fire its own API call, then scrape the rendered results table from the DOM.
+     Safer than the alternative below because Enterprise v3 scores behavioral signals tied to the
+     actual page/session — a token minted and used in the same session looks like normal traffic.
+     Cost: slow (full page load + JS render + randomized delay per query, ~5-15s each, same
+     convention as the existing Complot browser scraper) — thousands of targeted lookups would
+     take hours, comparable to prior browser-based scrapes in this project.
+   - **Mint token in a browser, replay against the API directly** — faster (clean JSON vs DOM
+     scraping) but riskier: separating token generation from the request that consumes it is a
+     known pattern Enterprise scoring flags, likely causing intermittent silent rejections rather
+     than a clean failure.
+   - **Paid CAPTCHA-solving service (2captcha etc.)** — ruled out; not something to build,
+     regardless of the underlying data being public.
+2. **Query scope is unconfirmed** — search body always sends 7 fields with 0/null meaning "don't
+   filter," but whether an all-zero body returns the full historical dataset (like Complot/Bartech)
+   or requires a real filter is unknown (backend was down during testing). Blocks scraper design
+   until retested:
+   - **If full-list works** → same model as Complot/Bartech, just slower per-page from token overhead.
+   - **If a real filter is required** → targeted model only: loop over gush/helka pairs already
+     known from Madlan's nationwide projects export (`docs/all_projects_08072026.xlsx`), one query
+     per Tel Aviv project — mirrors the `scrape_parcels` pattern already built for Bartech
+     (zmora/mitzpe_afek runs). Lower volume, which also caps token/browser-session overhead.
+
+**Worth flagging**: reCAPTCHA Enterprise is a deliberate control the site owner put on this
+endpoint specifically — materially bigger step than any committee scraped so far (all either had
+no such protection or a soft client-side check). The browser-driving approach is the least
+invasive path (mimics a human using their own form) but is still a real build/maintenance cost
+(DOM scraping is more fragile to UI changes than API scraping) — worth confirming it's worth
+pursuing before investing the time. No code written.
+
+**Decision (Rotem, 2026-07-15): go with Option A** — Selenium/`undetected-chromedriver` driving
+the real search UI (not direct API calls with a replayed token).
+
+**BUILD COMPLETE (2026-07-15) — pending live validation, deferred to next session ("tomorrow"):**
+
+- **`scrapers/tel_aviv/scraper.py`** — `TelAvivPermitsBrowserScraper`. Three public methods:
+  - `scrape_parcels(pairs)` — targeted גוש/חלקה lookup, same `scrape_parcels`-style shape as
+    Bartech's.
+  - `scrape_license_ids(ids)` — explicit-list lookup by `licenseId`, used for gap-fill.
+  - `scan_license_range(start, consecutive_miss_limit)` — sequential upward scan with a
+    consecutive-genuine-miss stopping threshold.
+  - Real bugs found and fixed **live**, via direct browser observation (Rotem watching the
+    non-headless window) and empirical testing — do not re-introduce these:
+    - **Must run non-headless.** Headless got a syntactically-valid-but-server-rejected token
+      (`400 Invalid assertion`); the identical query in a real window succeeded (`200`).
+      Confirmed by direct comparison.
+    - **Form must be reloaded/re-navigated before every query**, not reused — Angular swaps the
+      form out for a results view after a search, so previously-found `formcontrolname` elements
+      go stale on the second query onward.
+    - **Race condition**: the field being present in the DOM does not mean Angular's reactive
+      `FormGroup` has finished wiring/default-populating it — filling too early gets silently
+      overwritten back to `"0"` (caught by Rotem watching the live browser). Fixed with an
+      explicit settle delay + a fill-then-verify-then-JS-fallback in `_fill_field()`.
+    - **Blocked ≠ not-found**: a `400`/gateway rejection was initially mis-counted as a genuine
+      "no permit here," which would have silently truncated scans at a false ceiling. Fixed:
+      `_parse_response()` now returns a 3-way outcome (`'ok'` / `'blocked'` / `'error'`), and
+      `_query()` retries blocked/error outcomes with scaling backoff (30-75s × attempt, up to 3
+      tries) rather than counting them as misses.
+    - **Adaptive rate-limiting confirmed empirically**: after a couple of successful queries in a
+      tight loop, the gateway started rejecting every subsequent request with `400 Invalid
+      assertion` even in a real browser — reCAPTCHA Enterprise degrades a session's score based on
+      request frequency/pattern, not just headless-ness. Mitigated by (a) using the results page's
+      own **"חיפוש חדש" button** for in-app navigation between queries instead of a full
+      `driver.get()` reload every time (a real user doing several searches doesn't reload the
+      whole SPA bundle each time — confirmed the button exists via a live screenshot from Rotem),
+      and (b) longer inter-query delays (10-25s normal, scaling backoff on rejection). Full
+      resilience under sustained real-world load is **not yet proven** — this needs the deferred
+      live validation pass.
+- **`scripts/run_tel_aviv.py`** — 3-phase orchestration:
+  1. Parcel mode over Tel Aviv's known gush/helka pairs (excludes `אוכלס`/occupied projects —
+     cuts the pair count from 5,640 to **3,893**, since fully-complete projects have no reason to
+     show new permit activity). **`PARCEL_LIMIT = 150`** caps the first real run to a validation
+     batch, per Rotem — raise/remove once proven stable at scale.
+  2. Gap-fill: scans every `licenseId` between the min/max actually found in phase 1 that phase 1
+     didn't already surface (catches permits for projects not yet in Madlan, without a blind
+     from-year-0001 scan).
+  3. Sequential continue: scans upward from (max found) + 1 to catch new filings, same
+     consecutive-miss-threshold logic.
+  - Rotem's explicit design call: **do not** derive the scan seed from Madlan's permit-request
+    *dates* (the nationwide export has no permit-number field at all — confirmed) — derive
+    everything from the scraper's own actual findings instead.
+- **`scripts/run_tel_aviv_matcher.py`** — thin `matcher.run()` call, same shape as every other
+  committee's matcher runner. No `permit_url_base` (detail pages need Azure B2C login).
+- **Known schema gap, by design (not a bug)**: `request_date`, `request_category`, `requestor`,
+  `bakasha_description`, `shimush_ikari`, `unit_count` are left blank — not available from the
+  public search response, only from the login-gated detail page. Per CLAUDE.md's data-integrity
+  rule, blank rather than fabricated.
+- **Status vocabulary (`STATUS_MAP`) ships empty** — only 2 real values seen so far
+  (`בדיקה מרחבית מחלקת רישוי`, `פניה נדחתה`) plus several more surfaced mid-testing
+  (`סגירת בקשה-נמסר היתר`, `סגירת בקשה-פג תקף החלטה`, `סגירת בקשה-נפתחה בטעות`,
+  `סיום רישוי-במערכת קודמת`) — not yet enough real data to classify confidently. New values log
+  via `[NEW STATUS]`; classify once a real batch run has completed (same iterative pattern as
+  Bartech's `STATUS_MAP`).
+- **Next session**: run `scripts/run_tel_aviv.py` for real (150-pair batch), confirm the fixes
+  hold up over a longer session, then decide whether to raise `PARCEL_LIMIT` toward the full 3,893.
 
 ### 4. Review pending reports (with colleague)
 
