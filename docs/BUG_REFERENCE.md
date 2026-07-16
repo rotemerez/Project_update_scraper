@@ -1,6 +1,129 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-15
+**Last Updated:** 2026-07-16
+
+---
+
+## BUG-021 — Tel Aviv scraper: uncaught Selenium exception mid-retry crashed the entire scrape
+
+**Severity:** High — one transient page-load timeout killed a multi-hour unattended run
+**Fixed in:** Session S (2026-07-16)
+**File:** `scrapers/tel_aviv/scraper.py` → `_query()`
+
+### Root cause
+
+`_query()`'s retry loop only classified bad *responses* (`'blocked'`/`'error'` from
+`_parse_response()`) — it had no guard around Selenium exceptions raised *while attempting* a
+query. A `TimeoutException` from `_load_search_form()` on a retry attempt (confirmed live: the
+form's `entrance` field never appeared within 15s after a "חיפוש חדש" transition) propagated
+uncaught all the way up through `scrape_parcels()` and killed the whole script — including every
+query still queued after it.
+
+### Fix
+
+Wrapped the per-attempt body (`_load_search_form()` → `_fill_field()` → `_submit_and_capture()`)
+in `try/except WebDriverException`, treating any Selenium-level exception the same as a
+`'blocked'`/`'error'` response outcome — logged, backed off, retried. The driver is also
+force-restarted on this path (not just the periodic `restart_every` cadence) since an exception
+mid-fill can leave the page in a state the next attempt can't recover from.
+
+### When adding a scraper behind bot-defense (CAPTCHA, WAF, rate limiting)
+
+See BUG-018's note below — the same principle extends to the *mechanism* of retrying, not just
+classifying responses: any retry loop driving a real browser must assume the browser itself can
+throw mid-attempt (stale element, navigation timeout, crashed renderer), and must catch at the
+retry-loop level, not just at the response-parsing level. A retry loop that can itself be killed
+by the thing it's retrying against defeats its own purpose.
+
+---
+
+## BUG-020 — Bartech scraper: permit_status_date pulled from the wrong track when multiple stage tables share the same status rank
+
+**Severity:** Medium — correct status, wrong milestone date on matched permits (found via
+colleague manual review of `harel_report.xlsx`, 2026-07-15/16)
+**Fixed in:** Session S (2026-07-16)
+**File:** `scrapers/bartech/api_scraper.py` → `_parse_detail()`, new `_parse_certificates()`
+
+### Root cause
+
+A Bartech detail page can have *multiple* `סטטוס שלב` stage tables — e.g. one for the permit-issuance
+track (מסלול רישוי) and a separate one for the work-commencement track (צו התחלת עבודה) — and both
+can independently reach the same status rank (`היתר`) at different dates. `_parse_detail()`'s
+rank-based scan (`if rank > best_rank`) only updates on a *strictly higher* rank, so whichever
+table's matching-rank stage is scanned last effectively wins if the correct one was deliberately
+left in `_UNMAPPED_STAGES` (e.g. `'הוצאת היתר בניה'` — "permit issued but may not be signed
+yet") and a same-rank stage from a different track (`'מתן צו התחלת עבודה'`) is the only one that
+actually maps to a status. Confirmed live on two permits: `20240647` reported `היתר` dated
+`12/05/2026` (from the work-order track) when the certificate's real issuance date was
+`23/03/2026`; `20190029` reported `טופס 4` dated `20/11/2025` instead of the certificate's
+`19/11/2025` (off by one day, same root cause).
+
+### Fix
+
+The detail page's `תעודות` (certificates) table — headers `['סוג תעודה', 'מספר', 'תאריך הפקה']`
+— is the authoritative record for exactly the two milestones it lists (`היתר`, `טופס 4`/`תעודת
+גמר`). New `_parse_certificates()` parses it into `{status: date}`; `_parse_detail()` still uses
+the existing rank-based stage scan to determine *which* status was reached (the certificates table
+says nothing about `בקשה להיתר`/`היתר בתנאים`), but overrides the *date* with the certificate
+table's value whenever the reached status has one.
+
+### General lesson
+
+When a status can be reached via more than one table/track on a detail page, don't assume "highest
+rank wins, first-seen date sticks" — check whether the page has a dedicated authoritative-date
+table before trusting whatever stage table happens to be scanned first.
+
+---
+
+## BUG-019 — Matcher: migrash tie-break silently never fired, and single-candidate matches were accepted without checking migrash at all
+
+**Severity:** High — wrong project assignment on any gush/helka shared by multiple projects
+(found via colleague manual review of `Kiryat_Ata_July_2026.xlsx`, 2026-07-15/16)
+**Fixed in:** Session S (2026-07-16)
+**File:** `transform/matcher.py` → `_parse_migrash_set()` (was `_parse_migrash()`),
+`_pick_best_candidate()`; `scrapers/bartech/api_scraper.py` (migrash scraping added)
+
+### Root cause
+
+Two compounding bugs:
+1. `_parse_migrash()` looked for the literal word `מגרש` via regex (`מגרש\s*(\d+)`), but the real
+   `תבע+מגרש` project-file column format is `plan+number` (e.g. `תמל/1024+179`, comma-separated
+   for multi-lot projects) — the word never appears, so the migrash tie-break was a no-op on every
+   real project row.
+2. Even with correct parsing, a permit whose gush/helka matched only **one** existing BO project
+   was accepted blindly, with no check that the permit's migrash actually belongs to that
+   project — a gush/helka can cover many migrashim, each its own project, and new ones get added
+   over time, so "only one candidate exists right now" isn't proof the permit belongs to it.
+3. Bartech's scraper never captured a `migrash` field at all (only Complot's did), so the fix
+   above had no live data to work with on any Bartech city until this session.
+
+### Fix
+
+`_parse_migrash_set()` correctly parses the `plan+number` format (returns a set, since one project
+row can list several migrashim). `_pick_best_candidate()` now checks migrash before date/fuzzy-name
+tie-breaks for both single- and multi-candidate cases, and returns `None` ("no confident match")
+whenever the permit's migrash doesn't belong to any candidate's migrash set that has migrash data
+to compare against — instead of silently guessing. `_make_row()` now includes `project_migrash` +
+`permit_migrash` columns so this is auditable in every report. Migrash scraping was added to
+`scrapers/bartech/api_scraper.py` (list-page `Label12` tooltip + detail-page `מספר מגרש` column),
+mirroring the existing `block_lot`/`detail_block_lot` pattern.
+
+### Verified
+
+Kiryat Ata: 5 permits previously misattributed to `מגרש_179_183_האבוקדו`/`מגרש_202_204_האבוקדו`
+no longer wrongly match. Zmora: isolated the fix's exact effect by re-running the matcher with
+migrash-awareness disabled — confirmed a 162-permit drop in the matched cache is entirely
+attributable to the fix, and spot-checked 8 of them plus the 3 lost `status_advanced` rows
+individually; all were genuine gush/helka conflicts (one, `20190936`, was actively being
+misattributed to a wrong project with `db_status='היתר בניה'` when the correct migrash-matched
+project was already `אוכלס`/fully complete — a real false positive, not just a missed match).
+
+### When multiple candidates share a join key but the data source is incomplete
+
+Don't treat "there's only one plausible match right now" as confirmation — if the join key
+(gush/helka here) is known to be coarser than the real entity (migrash), a missing competing
+candidate can mean "doesn't exist in our data yet," not "this is the only one." Prefer declining
+the match over guessing when a finer-grained signal (migrash) is available but doesn't corroborate.
 
 ---
 

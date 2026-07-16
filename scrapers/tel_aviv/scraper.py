@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 
 import setuptools  # noqa: F401  -- provides distutils shim on Python 3.12+/3.13
 import undetected_chromedriver as uc
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -290,15 +291,30 @@ class TelAvivPermitsBrowserScraper:
         the query itself, so it must never be reported to the caller as a
         genuine "not found" -- callers should treat an exhausted retry as
         inconclusive, not as a confirmed miss.
+
+        A Selenium-level exception mid-attempt (form reload timing out, a
+        stale element after a slow page transition, etc.) is treated the
+        same way as a 'blocked'/'error' response -- confirmed live: an
+        uncaught TimeoutException from `_load_search_form()` on a retry
+        attempt killed an entire multi-hour scrape run instead of just that
+        one query. The driver is restarted before retrying since an
+        exception mid-fill can leave the page in a state the next attempt
+        can't recover from otherwise.
         """
         outcome, records = 'error', []
         for attempt in range(1, max_retries + 1):
-            self._load_search_form()
-            for name, value in fields.items():
-                self._fill_field(name, value)
-            response = self._submit_and_capture()
-            self._maybe_restart()
-            outcome, records = self._parse_response(response, block_lot_hint=block_lot_hint)
+            try:
+                self._load_search_form()
+                for name, value in fields.items():
+                    self._fill_field(name, value)
+                response = self._submit_and_capture()
+                outcome, records = self._parse_response(response, block_lot_hint=block_lot_hint)
+            except WebDriverException as exc:
+                _log(f'[ERROR] Selenium exception on attempt {attempt} for {fields}: {exc}')
+                outcome, records = 'error', []
+                self._restart_driver()
+            else:
+                self._maybe_restart()
             if outcome == 'ok':
                 time.sleep(random.uniform(10, 25))
                 return outcome, records

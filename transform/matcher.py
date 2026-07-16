@@ -303,17 +303,33 @@ def _is_temporally_plausible(permit: pd.Series, proj: pd.Series, max_days_before
     return (proj_date - permit_date).days <= max_days_before
 
 
-def _parse_migrash(val) -> str:
-    """Extract a bare migrash number from a 'תבע+מגרש' field value like 'נת/1234/מגרש 5' or '5'."""
+def _parse_migrash_set(val) -> set:
+    """
+    Extract all migrash numbers from a 'תבע+מגרש' field value. A project row can list
+    several migrashim (comma-separated) when it spans multiple lots. Formats seen:
+      'מגרש 5'                              -> {'5'}
+      '5'                                    -> {'5'}
+      'תמל/1024+179 , תמל/1024+183'          -> {'179', '183'}   (plan_number+migrash_number)
+    """
     s = _clean(val)
     if not s:
-        return ''
-    m = re.search(r'מגרש\s*(\d+)', s)
-    if m:
-        return m.group(1)
-    if re.fullmatch(r'\d+', s):
-        return s
-    return ''
+        return set()
+    result = set()
+    for part in s.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.search(r'מגרש\s*(\d+)', part)
+        if m:
+            result.add(m.group(1))
+            continue
+        m = re.search(r'\+\s*(\d+)\s*$', part)
+        if m:
+            result.add(m.group(1))
+            continue
+        if re.fullmatch(r'\d+', part):
+            result.add(part)
+    return result
 
 
 def _fuzzy_name_score(name1: str, name2: str) -> int:
@@ -327,27 +343,38 @@ def _pick_best_candidate(
     candidates: List[int],
     permit: pd.Series,
     projects_df: pd.DataFrame,
-) -> int:
+) -> Optional[int]:
     """
-    Given multiple BO project candidates sharing a Gush/Helka with this permit,
+    Given one or more BO project candidates sharing a Gush/Helka with this permit,
     return the index of the best match using:
       1. Migrash (if both sides have one and exactly one candidate matches)
       2. Fuzzy developer name vs. requestor (highest score >= threshold)
       3. First candidate (fallback)
+
+    A gush/helka can cover many migrashim, each its own BO project, and new ones are
+    added over time -- so sharing a gush/helka is not proof a permit belongs to any
+    particular existing candidate. When the permit has a scraped migrash and at least one
+    candidate has migrash data to compare against, but none of them contains it, this
+    returns None ("no confident match" -- likely a project that doesn't exist in BO yet)
+    instead of silently falling through to a weaker tie-break (date/fuzzy name) that would
+    otherwise misattribute the permit to an unrelated migrash on the same gush/helka.
     """
+    permit_migrash = _clean(permit.get('migrash', ''))
+
+    if permit_migrash:
+        migrash_sets = {idx: _parse_migrash_set(projects_df.loc[idx].get(_BO_MIGRASH_COL, '')) for idx in candidates}
+        candidates_with_data = [idx for idx in candidates if migrash_sets[idx]]
+        if candidates_with_data:
+            migrash_hits = [idx for idx in candidates_with_data if permit_migrash in migrash_sets[idx]]
+            if len(migrash_hits) == 1:
+                return migrash_hits[0]
+            if migrash_hits:
+                candidates = migrash_hits
+            else:
+                return None
+
     if len(candidates) == 1:
         return candidates[0]
-
-    permit_migrash = _clean(permit.get('migrash', ''))
-    if permit_migrash:
-        migrash_hits = [
-            idx for idx in candidates
-            if _parse_migrash(projects_df.loc[idx].get(_BO_MIGRASH_COL, '')) == permit_migrash
-        ]
-        if len(migrash_hits) == 1:
-            return migrash_hits[0]
-        if migrash_hits:
-            candidates = migrash_hits
 
     # Step 2: Date anchor — match permit's request_date against BO's תאריך בקשה להיתר (±4 days)
     # Runs before fuzzy name so an exact date match isn't overridden by identical developer names.
@@ -519,7 +546,8 @@ def run(
             ]
             if plausible:
                 matched_idx = _pick_best_candidate(plausible, permit, projects_df)
-                match_method = 'gush_helka'
+                if matched_idx is not None:
+                    match_method = 'gush_helka'
 
         # 2. Address fallback
         if matched_idx is None:
@@ -715,6 +743,7 @@ def _make_row(
         'project_name':       str(proj['שם פרויקט']) if proj is not None else '',
         'project_sug_bnia':   _clean(proj.get('סוג בנייה', '')) if proj is not None else '',
         'project_gush_helka': str(proj['גוש-חלקה']) if proj is not None else '',
+        'project_migrash':    _clean(proj.get(_BO_MIGRASH_COL, '')) if proj is not None else '',
         'match_method':       match_method,
         'db_status':          db_status,
         'scraped_status':     scraped_status,
@@ -731,6 +760,7 @@ def _make_row(
         'bakasha_description':  _clean(permit.get('bakasha_description', '')),
         'requestor':           _clean(permit.get('requestor', '')),
         'permit_block_lot':   _clean(permit.get('block_lot', '')),
+        'permit_migrash':      _clean(permit.get('migrash', '')),
         'request_url':         request_url,
     }
 

@@ -7,7 +7,7 @@ Two-step process:
   2. PermitApplicationDetails       -> per-permit detail page: stages, request_type, gush/helka
 
 Output schema (same as Complot):
-  request_number, request_date, full_address, city, block_lot,
+  request_number, request_date, full_address, city, block_lot, migrash,
   request_type, request_category, requestor, bakasha_description,
   shimush_ikari, unit_count,
   permit_status, permit_status_date, scrape_status
@@ -513,6 +513,36 @@ def _map_stage(stage_desc: str) -> str:
     return ''
 
 
+def _parse_certificates(soup: BeautifulSoup) -> Dict[str, str]:
+    """
+    Parse the תעודות (certificates) table -- headers ['סוג תעודה', 'מספר', 'תאריך הפקה'] --
+    into {status: תאריך הפקה}. This table only ever covers the היתר and טופס 4
+    milestones (a permit certificate and a final/occupancy certificate
+    respectively), each with its own authoritative issuance date.
+    """
+    dates: Dict[str, str] = {}
+    for table in soup.find_all('table'):
+        rows = table.find_all('tr')
+        if not rows:
+            continue
+        header_cells = [td.get_text(strip=True) for td in rows[0].find_all(['td', 'th'])]
+        if header_cells != ['סוג תעודה', 'מספר', 'תאריך הפקה']:
+            continue
+        for row in rows[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
+            if len(cells) < 3:
+                continue
+            cert_type, _, cert_date = cells[0], cells[1], cells[2]
+            if not cert_date:
+                continue
+            if 'גמר' in cert_type:
+                dates['טופס 4'] = cert_date
+            elif cert_type == 'היתר':
+                dates['היתר'] = cert_date
+        break
+    return dates
+
+
 def _extract_dl_field(soup: BeautifulSoup, label_text: str) -> str:
     """Extract value from <dt>label</dt><dd>value</dd> pattern."""
     for dt in soup.find_all('dt'):
@@ -550,8 +580,9 @@ def _parse_detail(html: str) -> Dict:
             bakasha_description = td.get_text(strip=True).replace('מהות הבקשה:', '').strip()
             break
 
-    # Gush/helka from detail page
+    # Gush/helka/migrash from detail page
     detail_block_lot = ''
+    detail_migrash = ''
     for table in soup.find_all('table'):
         rows = table.find_all('tr')
         if not rows:
@@ -561,6 +592,7 @@ def _parse_detail(html: str) -> Dict:
             continue
         gush_idx = header_cells.index('מספר גוש')
         helka_idx = header_cells.index('מספר חלקה')
+        migrash_idx = header_cells.index('מספר מגרש') if 'מספר מגרש' in header_cells else None
         for row in rows[1:]:
             cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
             if len(cells) > max(gush_idx, helka_idx):
@@ -568,6 +600,8 @@ def _parse_detail(html: str) -> Dict:
                 helka = cells[helka_idx]
                 if gush and helka:
                     detail_block_lot = f'{gush}-{helka}'
+                    if migrash_idx is not None and len(cells) > migrash_idx:
+                        detail_migrash = cells[migrash_idx]
                     break
         if detail_block_lot:
             break
@@ -608,12 +642,26 @@ def _parse_detail(html: str) -> Dict:
             if stage_desc and stage_desc not in _UNMAPPED_STAGES and not status:
                 _log(f'  [NEW STAGE] Unmapped: [{stage_desc}]')
 
+    # The תעודות (certificates) table is the authoritative source for the
+    # היתר/טופס 4 date -- confirmed live (colleague review, 2026-07-15): the
+    # שלבי stage tables can carry the same status at multiple different dates
+    # across separate tracks (e.g. permit-issuance track vs. work-order
+    # track), and 'הוצאת היתר בניה' is deliberately in _UNMAPPED_STAGES ("not
+    # a tracked milestone"), so the rank-based scan above can silently pick a
+    # later, wrong-track date for the same status instead of the certificate's
+    # own תאריך הפקה. Override the date (not the status, since only היתר/
+    # טופס 4 ever appear here) whenever the certificate table has a match.
+    cert_date_by_status = _parse_certificates(soup)
+    if best_status in cert_date_by_status:
+        best_date = cert_date_by_status[best_status]
+
     return {
         'request_type':        request_type,
         'bakasha_description': bakasha_description,
         'shimush_ikari':       shimush_ikari,
         'unit_count':          unit_count,
         'detail_block_lot':    detail_block_lot,
+        'detail_migrash':      detail_migrash,
         'permit_status':       best_status,
         'permit_status_date':  best_date,
     }
@@ -742,6 +790,8 @@ class BartechPermitsAPI:
                     permit['unit_count'] = detail['unit_count']
                 if detail['detail_block_lot']:
                     permit['block_lot'] = detail['detail_block_lot']
+                if detail['detail_migrash']:
+                    permit['migrash'] = detail['detail_migrash']
             if (i + 1) % 200 == 0:
                 _log(f'  [{i + 1}/{total}] detail pages fetched')
             time.sleep(0.2)
@@ -882,10 +932,12 @@ def _parse_row(tr, type_label: str, type_id: int, city: str) -> Optional[Dict]:
 
     label12 = tr.find(id='Label12')
     block_lot = ''
+    migrash = ''
     if label12:
         tooltip = label12.get('tooltip', '') or label12.get('ToolTip', '')
         raw_text = label12.get_text(strip=True)
         block_lot = _parse_block_lot(tooltip) or _parse_block_lot(raw_text) or raw_text
+        migrash = _parse_migrash(tooltip) or _parse_migrash(raw_text)
 
     if not entity_num:
         return None
@@ -899,6 +951,7 @@ def _parse_row(tr, type_label: str, type_id: int, city: str) -> Optional[Dict]:
         'full_address':       full_address,
         'city':               city,
         'block_lot':          block_lot,
+        'migrash':            migrash,
         'request_type':       request_type,
         'request_category':   type_label,
         'requestor':          requestor,
@@ -929,6 +982,11 @@ def _parse_block_lot(tooltip: str) -> str:
     if gush and helka:
         return f'{gush.group(1)}-{helka.group(1)}'
     return ''
+
+
+def _parse_migrash(tooltip: str) -> str:
+    m = re.search(r'מגרש:\s*(\d+)', tooltip)
+    return m.group(1) if m else ''
 
 
 def _extract_last_page(html: str) -> Optional[int]:

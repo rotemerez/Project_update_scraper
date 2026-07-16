@@ -1,12 +1,94 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-15 (Session R)
+**Last Updated:** 2026-07-16 (Session S)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session S — 2026-07-16
+
+- **Migrash-based project matching fixed and extended to Bartech** (colleague's Kiryat Ata
+  review, `docs/Kiryat_Ata_July_2026.xlsx`, flagged wrong project assignment when multiple
+  projects share one גוש/חלקה — e.g. gush/helka `10514-11` covers migrashim 179-238+ under
+  `שכונת האבוקדו`, several without a BO project page yet):
+  - `transform/matcher.py`: `_parse_migrash` → `_parse_migrash_set` — the old regex only matched
+    the literal word "מגרש", but the real `תבע+מגרש` project-file column format is `plan+number`
+    (e.g. `תמל/1024+179`, comma-separated for multi-lot projects), so the migrash tie-break had
+    silently never fired. `_pick_best_candidate()` now checks migrash before date/fuzzy-name for
+    both single- and multi-candidate cases, and returns `None` ("no confident match") when the
+    permit's scraped migrash doesn't belong to any gush/helka candidate's migrash set, instead of
+    silently misattributing to the wrong project. `_make_row()` now includes `project_migrash` +
+    `permit_migrash` columns in every report so this is auditable going forward (colleague's
+    explicit request).
+  - **Extended migrash scraping to Bartech** (`scrapers/bartech/api_scraper.py`) — previously only
+    Complot's scraper captured `migrash`. Confirmed via live screenshots (Rotem) that Bartech's
+    מקרקעין cell (list page) and detail-page גוש/חלקה table **both** expose מגרש
+    (`מספר מגרש` column on the detail table). Added `_parse_migrash()`, wired into both the
+    list-page row parser and `_parse_detail()`/`_enrich_with_details()`, mirroring the existing
+    `block_lot`/`detail_block_lot` precedent. Verified against real HTML samples
+    (`outputs/debug_bartech_detail.html`) and the screenshot text (`גוש: 31445, חלקה: 46, מגרש: 348`).
+  - Verified end-to-end against real Kiryat Ata data: the 5 permits the colleague flagged
+    (20240378/382/383/412/413, scraped migrash 187/188/189/191/219) no longer wrongly match
+    `מגרש_179_183_האבוקדו` / `מגרש_202_204_האבוקדו` — matcher now correctly declines instead of
+    guessing. They won't resurface until the colleague's new project rows (with their own
+    `תבע+מגרש` values) are added to the projects file — that's a data step, not a code bug.
+  - `docs/all_projects_08072026.xlsx` already has `תבע+מגרש` populated for Bartech cities too
+    (4,615/24,886 rows nationwide), so the fix is immediately usable — see Immediate #2 below.
+
+- **All 6 existing Bartech cities rescraped + re-matched** (was Immediate #2, now done) — הולון,
+  קריות, חדרה, הראל, זמורה, מיצפה אפק. Results (status_advanced / untracked / manual_review):
+
+  | Committee | New | Prior baseline | Notes |
+  |---|---|---|---|
+  | הולון | 42 / 36 / 0 (cache 1364) | 194 status_advanced, 3 untracked (very old pre-הסתיים-fix baseline, not a fair comparison) | |
+  | קריות | 36 / 14 / 0 (cache 1214) | no documented baseline | |
+  | חדרה | 18 / 48 / 0 (cache 782) | no documented baseline | |
+  | הראל | 5 / 33 / 0 (cache 155) | 5 / 32 (cache 166, Session J) | stable — little gush/helka overlap here |
+  | זמורה | 4 / 70 / 0 (cache 101) | 7 / 70 (cache 264, Session J) | **isolated the fix's exact effect** — re-ran with migrash disabled, confirmed 162-permit cache drop is 100% attributable to the fix; spot-checked 8 permits + all 3 lost status_advanced rows individually, all genuine gush/helka conflicts (see BUG-019) |
+  | מיצפה אפק | 17 / 34 / 0 (cache 466) | 14 / 33 (cache 601, Session J) | status_advanced went up — real accumulated progress, not re-tested in isolation |
+
+- **BUG-020 fixed**: Bartech `permit_status_date` was sometimes pulled from the wrong stage table
+  when multiple tracks (e.g. permit-issuance vs. work-commencement) reach the same status rank at
+  different dates — found via colleague's manual review of `harel_report_15_07_2026.xlsx` (2 of
+  her flagged permits, `20240647`/`20190029`, had a correct status but a date off by 7 weeks / 1
+  day respectively). Fixed by adding `_parse_certificates()`, which reads the detail page's
+  authoritative `תעודות` (certificates) table and overrides the date for `היתר`/`טופס 4` when
+  present. Verified against both permits' real detail-page HTML — both now produce the exact
+  colleague-confirmed correct date. **Not yet re-run against the 6 rescraped cities' detail
+  pages** — this fix landed after their rescrape completed; see Immediate item below.
+
+- **BUG-021 fixed**: Tel Aviv scraper's `_query()` retry loop didn't catch Selenium exceptions
+  mid-attempt (only bad *responses*) — a `TimeoutException` on a retry attempt crashed the entire
+  `_smoke_test_tel_aviv.py` run outright. Now wrapped in `try/except WebDriverException`, treated
+  like any other retryable outcome, with a forced driver restart.
+
+- **Tel Aviv smoke test run live (post-fix)** — very informative, but not in the way hoped:
+  - Only 2 of 5 parcel queries and 0 of 9 scan queries succeeded; every other query was
+    reCAPTCHA-rejected even after 3 retries with backoff up to 3+ minutes.
+  - **Rotem manually tested the same UI by hand** (not automated) to isolate whether this was
+    automation-detection: **a real human hit the identical wall after just 4 searches** in a few
+    minutes — the איתור button simply stopped responding, no error shown. This rules out
+    automation-detection as the cause — it's IP/session-level reCAPTCHA Enterprise throttling that
+    catches genuine human traffic too, not something specific to the scraper.
+  - **Not yet determined**: whether it recovers after a cooldown, and whether the "nothing
+    happens" failure is a client-side token-mint hang or a silent server rejection. A precise
+    Claude-Desktop investigation prompt was written (see chat) but not yet run — do this before
+    touching the scraper again, since it determines whether the full 3,893-pair scrape is even
+    achievable at any pace, or needs a fundamentally different approach.
+  - Left `scripts/_smoke_test_tel_aviv.py`'s browser session mid-run when Rotem closed the Chrome
+    window manually; process was killed cleanly (`TaskStop`), no `outputs/tel_aviv_fresh.csv`
+    produced this session.
+
+- **Complot triage additions** (מורדות כרמל event classification, colleague export 2026-07-15/16):
+  2 new `EVENT_TO_STATUS` entries (`הפקת טופס 4`, `מסירת טופס 4` → `'טופס 4'`), 102 new
+  `_UNMAPPED_EVENTS`, 13 new `_MANUAL_REVIEW_EVENTS`. Added to `scrapers/complot/api_scraper.py`,
+  checked for zero duplicates/conflicts against existing entries before merging. **מורדות כרמל
+  matcher not yet re-run** with these — still only ~22/138 events were classified as of the
+  original Session O run; check with colleague whether triage is now complete before re-running
+  (see existing Immediate #1 item below, still open).
 
 ### Session R — 2026-07-15
 
@@ -243,7 +325,58 @@ Once classification is done, get the final Python export from whoever finishes a
 generated with only 22/138 events classified, so some `untracked`/`manual_review` rows may reclassify
 to `status_advanced` once the rest are triaged.
 
-### 3. Build custom crawlers for non-Complot/Bartech committees
+### 2. ~~Rescrape + re-run matcher for existing Bartech cities (migrash fix)~~ — DONE (Session S, 2026-07-16)
+
+All 6 cities rescraped + re-matched: הולון, קריות, חדרה, הראל, זמורה, מיצפה אפק. Results and
+per-city verification notes are in Session S (Done, above). Zmora's fix effect was isolated and
+individually verified; the others were spot-checked less deeply — worth a closer look if their
+`untracked` counts look off in review.
+
+**Follow-up now needed**: BUG-020 (wrong-track `permit_status_date`, see Done above and
+`docs/BUG_REFERENCE.md`) was fixed in `scrapers/bartech/api_scraper.py` *after* all 6 rescrapes
+above already completed — so their `*_fresh.csv`/`*_report.xlsx` files may still have wrong dates
+on any permit where multiple stage tracks (e.g. permit-issuance vs. work-commencement) reach the
+same status at different dates. Only affects dates, not status/matching/flag correctness. Lower
+urgency than a full rescrape — could re-run just the detail-fetch phase (`_enrich_with_details`)
+against already-known permit numbers rather than a full list-phase rescrape, if that's faster.
+
+### 3. Tel Aviv reCAPTCHA throttling — ON HOLD (Rotem's call, 2026-07-16), full findings below
+
+**Status: paused.** Not resuming scraper work until the open question below is answered.
+
+**What's confirmed:**
+- The failure is **server-side, not a client-side hang** (Claude Desktop CDP investigation,
+  2026-07-16). A real reCAPTCHA Enterprise token is minted and sent with every request via
+  `X-Client-Assertion`; the Tel Aviv API gateway (`apimtlvprd.tel-aviv.gov.il`) responds `400
+  Invalid assertion` in ~150ms. Angular's `HttpClient` error handler swallows the 400 silently —
+  no UI feedback at all, which is why the איתור button just appears to do nothing.
+- BUG-021 fixed this session (uncaught Selenium exception mid-retry could crash the whole scrape)
+  — stands regardless of the throttling question below.
+
+**What's NOT actually resolved yet, despite the investigation** — the Claude Desktop test used a
+CDP-driven browser (same underlying protocol our own scraper's `undetected_chromedriver` uses,
+just without its anti-detection patches) and got rejected on **every single attempt, including
+the very first** — unlike Rotem's manual test (real browser, first 3-4 searches succeeded) and
+unlike our own scraper's earlier smoke test (also got real 200s before degrading). A
+permanently-flagged-as-automated session failing immediately, and staying failed after a 63-minute
+wait, tells us nothing about whether a *real* session's score recovers after backing off — it was
+guaranteed to fail throughout regardless of timing. The report's `action: "register"` theory is
+also weakened by Rotem's own results: a static action-name mismatch would have rejected his first
+search too, not just the later ones. Score decay from request volume/pattern (with CDP sessions
+starting from a permanently-low floor) fits both datasets better than an action-name bug.
+
+**The actual open question, unanswered**: does a real browser session's score recover after a
+cooldown once it degrades? Only testable by waiting on an *already-blocked real* tab (Rotem's own,
+or our scraper's own session) and retrying — a fresh automated session can't answer this, since
+it's disqualified before request volume even becomes a factor. This determines whether the full
+3,893-pair scrape is achievable at any pace (if score recovers, slower pacing may work) or needs a
+fundamentally different approach (if it doesn't recover, or recovery is too slow to be practical).
+
+**Next step when resumed**: Rotem waits on his own already-stuck browser tab (15-20+ min), retries
+the same query, and reports whether it starts working again — no scraper code changes until that's
+answered.
+
+### 4. Build custom crawlers for non-Complot/Bartech committees
 
 4 active-but-excluded committees have a real portal but run neither Complot nor Bartech
 (`config/committees.py`, `exclude_reason` in `proprietary`/`url_unverified`):
@@ -447,20 +580,46 @@ the real search UI (not direct API calls with a replayed token).
 - **Next session**: run `scripts/run_tel_aviv.py` for real (150-pair batch), confirm the fixes
   hold up over a longer session, then decide whether to raise `PARCEL_LIMIT` toward the full 3,893.
 
-### 4. Review pending reports (with colleague)
+### 5. Review pending reports (with colleague)
 
 | Committee | Report | Key figures |
 |---|---|---|
-| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — **run with only 22/138 events classified, re-run after triage completes** |
-| קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review |
-| הראל | `outputs/harel_report.xlsx` | 5 status_advanced, 32 untracked |
-| זמורה | `outputs/zmora_report.xlsx` | 7 status_advanced, 70 untracked |
-| מיצפה אפק | `outputs/mitzpe_afek_report.xlsx` | 14 status_advanced, 33 untracked |
+| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — **run with only 22/138 events classified; Complot triage export now added (Session S) but matcher not yet re-run, see item #1** |
+| קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review — pre-migrash-fix; consider re-scraping to pick up BUG-019 fix like the Bartech cities were |
+| הולון | `outputs/holon_report.xlsx` | 42 status_advanced, 36 untracked, 0 manual_review (rescraped Session S) |
+| קריות | `outputs/krayot_report.xlsx` | 36 status_advanced, 14 untracked, 0 manual_review (rescraped Session S) |
+| חדרה | `outputs/hadera_report.xlsx` | 18 status_advanced, 48 untracked, 0 manual_review (rescraped Session S) |
+| הראל | `outputs/harel_report.xlsx` | 5 status_advanced, 33 untracked, 0 manual_review (rescraped Session S) — **colleague review complete, see below** |
+| זמורה | `outputs/zmora_report.xlsx` | 4 status_advanced, 70 untracked, 0 manual_review (rescraped Session S) |
+| מיצפה אפק | `outputs/mitzpe_afek_report.xlsx` | 17 status_advanced, 34 untracked, 0 manual_review (rescraped Session S) |
 | ישובי הברון | `outputs/yishuvei_habaron_report.xlsx` | 2 status_advanced, 49 untracked |
 
 Kiryat Ata `manual_review` events to watch: `ביטול היתר`, `החלטת ועדת ערר`, `הפקת פרסום תמ"38`.
 
-### 5. Classify Hadera unmapped stages + add to scraper
+**הראל colleague review complete** (`docs/harel_report_15_07_2026.xlsx`, comment column, reviewed
+Session S) — mostly confirms the report is accurate (~20 of ~37 commented rows: "correct status
+and date"), plus real findings:
+- **BUG-020 found and fixed this session** (see Done above) — 2 permits had a status confirmed
+  correct but a wrong date, traced to the exact root cause and fixed.
+- **7 permits**: "correct status, incorrect date" or "incorrect status" with no code-level cause
+  identified yet — worth checking whether these are further instances of BUG-020's pattern (a
+  fresh Harel re-scrape with the fix would clarify) or a separate issue.
+- **7 permits**: existing project `הרימון_קרית_יערים` (and one for `החוצבים_5_מבשרת_ציון`) not
+  recognized because "request has new lot, while the project has old lot" — **this is a projects-file
+  data-staleness issue, not a scraper/matcher bug**: the BO project record's own גוש/חלקה needs
+  updating to the parcel's current numbering (likely a תב"ע-driven re-subdivision). Flag to
+  whoever maintains the projects export.
+- **1 permit** (`20250630`, "not valid as a new project- 2 units") slipped through
+  `_is_below_unit_minimum` uncaught: its `bakasha_description` says "שתי יח"ד" (Hebrew number
+  word "two", not the digit `2`), and `_extract_unit_count()` in `transform/matcher.py` only
+  parses digit patterns — a narrow, safe enhancement (recognizing אחד/אחת/שני/שתי/שלושה/ארבעה as
+  1-4) would let the matcher catch this automatically instead of relying on manual review. Not
+  yet implemented — flagged here for whenever unit-minimum false negatives are worth tightening.
+- ~15 permits: correctly flagged untracked, colleague confirmed as genuine new projects and
+  assigned new project IDs (e.g. `הפלמח_56_מבשרת_ציון`, `הכרמים_62א_מבשרת_ציון`) — validates the
+  untracked-flagging mechanism itself is working well.
+
+### 6. Classify Hadera unmapped stages + add to scraper
 
 Artifact: https://claude.ai/code/artifact/c0dae2d0-319e-4123-b580-332c90957984
 Use search + bulk-ignore for fast triage. Export JSON, then add entries to
