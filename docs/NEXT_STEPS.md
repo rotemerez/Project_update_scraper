@@ -1,12 +1,71 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-16 (Session S)
+**Last Updated:** 2026-07-16 (Session T)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; nationwide pipeline in progress
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 111-row report); nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session T — 2026-07-16
+
+- **ירושלים custom scraper built, full-run, and matcher wired** — first working scraper for a
+  previously-unidentified `proprietary` committee, taken all the way to a real matcher report in
+  one session. Full recon done via static JS bundle analysis (`ykpubdata.jerusalem.muni.il`, React
+  SPA) + live network captures with colleague testing from the office.
+  - **Two backend hosts, both plain REST/JSON, no Selenium needed:**
+    - `jergisinfohub.jerusalem.muni.il` `GET /Services/api/MetaDataObjectsDetails/1?gush=X&helka=Y&...`
+      — the רישוי בניה (`RishuiBniya`) parcel search, confirmed live. One row per תיק:
+      `tik_num`, `taarih_ptiha` (open date), `sug_bakasha` (type, often comma-joined multi-value),
+      `r_status`/`r_taarih_status` (רישוי status/date), `p_taarih_status`, `shimush`, `mevakesh`, `address`.
+    - `jerbasicserviceapi.jerusalem.muni.il` `POST /api/Db/ExecuteGetJSON` — generic stored-proc
+      executor (`{"ProcName": <int>, "Cnn": "cnnGisYk", "Parameters": {...}}`), ~28 proc IDs mapped
+      from the JS bundle. Two wired up: `242700473` (getProcessesContentPikuahBniaData, פיקוח stage
+      table — confirmed live schema `stepCodeText`/`stepStatusText`/`execDateStr`/`planDateStr`) and
+      `242700437` (fetchTikRushiData, thin misparTik lookup used by the sweep, see below).
+  - **Both hosts hit a transient Akamai 403 during initial recon** (non-office network) that cleared
+    on retest minutes later with no network change — looks like a burst rate-limit, not a persistent
+    office-IP gate like Complot. The full production run (below) completed with zero 403s.
+  - **No citywide "recent permits" feed exists** — every endpoint requires a search key (gush/helka,
+    street, תיק number, or תב"ע number). Scraper iterates (gush, helka) pairs already tracked in
+    `docs/all_projects_08072026.xlsx` (2,530 unique pairs for ירושלים) rather than discovering new
+    permits from nothing.
+  - Colleague's field rules confirmed and encoded: תאריך בקשה = `taarih_ptiha`; תאריך היתר =
+    `r_taarih_status` when `r_status` = "הופק-הוצא היתר בניה"; אכלוס/טופס 4 = פיקוח stage table,
+    `stepCodeText` matching "מסירת טופס 4"/"הפקת טופס 4"/"תעודת גמר" **and** `stepStatusText` = "בוצע"
+    (not "מתוכנן") — confirmed against real data (permits resolving to `טופס 4` in both the smoke
+    test and the full run).
+  - **Full run completed**: all 2,530 parcels → **7,927 unique permits** → `outputs/jerusalem_fresh.csv`.
+    `STATUS_MAP` grew to ~26 statuses from real data (started at 4 from initial recon); scraper logs
+    `[NEW STATUS]` for anything unmapped, same convention as Bartech/Complot — check
+    `scrapers/jerusalem/api_scraper.py` for the current full list.
+  - **Matcher wired and run**: new `scripts/run_jerusalem_matcher.py` (same pattern as
+    `run_harel_matcher.py`). min_year auto-computed as 2005; 7,927 → 6,004 permits after the filter;
+    **111-row report** (`outputs/jerusalem_report.xlsx`) — 103 `status_advanced`, 8 `untracked`, 0
+    `new_permit`, 0 `manual_review`. Matched cache: 3,611 permits (`outputs/jerusalem_matched_cache.json`).
+  - **Known gap, flagged in the matcher script's docstring, not yet confirmed**: Jerusalem's API has
+    no separate request-category field distinct from request_type, so `EXCLUDED_REQUEST_CATEGORIES`
+    (בקשה מקדמית etc.) can't filter anything for this city — only safe if רישוי בניה search results
+    are always finalized permit files, never preliminary/info-request stages. Spot-check the 8
+    `untracked` rows and a sample of `status_advanced` rows against this assumption.
+  - **Sequential תיק-number sweep built but NOT YET RUN** — `JerusalemPermitsAPI.sweep_by_tik_number()`
+    + a sweep phase in `scripts/run_jerusalem.py` (gated by `RUN_SWEEP = True`, uses the same
+    `_compute_min_year` convention as every other city). Unit-tested on year 2020 numbers 1-442 (570
+    results, correctly reproduced `2020/0440.00`/`.01`'s status from the independent parcel-search
+    path). **The completed full run above predates this code** (the sweep was added to
+    `run_jerusalem.py` *after* that background run had already started with the old file loaded), so
+    it has never actually run end-to-end as part of a full scrape. Next session: run it (either via
+    `scripts/run_jerusalem.py` end-to-end, which will redo the parcel scrape too, or by calling
+    `sweep_by_tik_number()` directly against the existing `jerusalem_fresh.csv`'s `request_number`
+    set as `known_tik_nums`, to avoid rescraping). Results land in `outputs/jerusalem_sweep.csv` and
+    are necessarily partial (no gush/helka/address from that endpoint) — needs manual parcel lookup
+    before matching against tracked projects.
+  - **Not yet done**: double-yod substring check against `transform/matcher.py`'s
+    `RELEVANT_TYPE_SUBSTRINGS` on the full dataset (`sug_bakasha` is often a comma-joined multi-value
+    string, e.g. "תוספת בניה / הרחבה לבניין קיים, ממ\"ד, בנית מחסן/מחסנים, בניית מרפסת" — matcher
+    substring logic needs to handle that); colleague's "gush/helka sometimes has +50 appended to the
+    helka" note not yet investigated.
 
 ### Session S — 2026-07-16
 
@@ -385,7 +444,7 @@ answered.
 |---|---|---|
 | נתניה | `url_unverified` — **RESOLVED, confirmed Bartech** | `https://vaadnet.netanyagis.co.il` — see below |
 | תל אביב יפו | `proprietary` — **partial recon done (2026-07-15)** | system identified, API host not yet confirmed — see below |
-| ירושלים | `proprietary` | system unknown — needs investigation before any scraper design |
+| ירושלים | `proprietary` — **scraper built + full run + matcher done (2026-07-16)** | custom REST API, `scrapers/jerusalem/api_scraper.py` — see Session T in Done, and sweep TODO below |
 | קצרין | `proprietary` | system unknown — needs investigation before any scraper design |
 
 **נתניה confirmed Bartech (2026-07-15 recon)** — same signature as v-harel/zmora/vmm/Holon/Krayot:
@@ -408,8 +467,24 @@ answered.
   `scripts/run_netanya.py` following the `run_harel.py` pattern, confirm `min_year`/pagination
   against the live site, smoke-test before a full scrape.
 
-For ירושלים / קצרין, the system isn't identified yet at all — first session on each should be
-pure reconnaissance (view-source, network tab, robots.txt) with no scraper code written until
+**ירושלים identified, scraper built, full run + matcher done (Session T, 2026-07-16)** — genuinely
+custom (not a disguised Complot/Bartech instance), see Session T write-up in Done and
+`scrapers/jerusalem/api_scraper.py` docstring for the full API mapping. Remaining work:
+1. **Run the sequential תיק-number sweep** (`JerusalemPermitsAPI.sweep_by_tik_number()`, built and
+   unit-tested this session but never run as part of a full scrape — the completed full run predates
+   this code, see Session T for why). Either re-run `scripts/run_jerusalem.py` end-to-end
+   (`RUN_SWEEP = True` is already set) or call `sweep_by_tik_number()` directly against the existing
+   `outputs/jerusalem_fresh.csv`'s `request_number` set to skip re-scraping known parcels. Results
+   are partial (no gush/helka/address) and need manual parcel lookup before matching.
+2. Double-yod substring check against `RELEVANT_TYPE_SUBSTRINGS` on the full `sug_bakasha` output
+   (comma-joined multi-value strings — matcher substring logic needs to handle that).
+3. Spot-check the "no request-category field" assumption flagged in
+   `scripts/run_jerusalem_matcher.py` — confirm רישוי בניה search results never include
+   preliminary/info-request stages that should've been excluded.
+4. Colleague's "gush/helka sometimes has +50 appended to the helka" note — not yet investigated.
+
+For קצרין, the system still isn't identified at all — first session should be pure
+reconnaissance (view-source, network tab, robots.txt) with no scraper code written until
 the actual data-access mechanism is confirmed. ישובי הברון (Session K) and נתניה both turned out
 to be disguised Complot/Bartech instances despite looking custom at first glance — always check
 for that signature in network requests before assuming a bespoke scraper is required.
