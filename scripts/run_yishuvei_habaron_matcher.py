@@ -11,7 +11,7 @@ Run from project root after yishuvei_habaron_fresh.csv exists:
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/yishuvei_habaron_fresh.csv',
     city_hebrew='ישובי הברון',
     output_path='outputs/yishuvei_habaron_report.xlsx',

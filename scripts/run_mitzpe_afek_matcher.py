@@ -11,7 +11,7 @@ Run from project root after mitzpe_afek_fresh.csv exists:
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/mitzpe_afek_fresh.csv',
     city_hebrew='באר יעקב',
     output_path='outputs/mitzpe_afek_report.xlsx',

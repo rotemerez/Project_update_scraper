@@ -13,7 +13,7 @@ public URL to link to (see docs/tlv_permit_api_findings.md).
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/tel_aviv_fresh.csv',
     city_hebrew='תל אביב יפו',
     output_path='outputs/tel_aviv_report.xlsx',

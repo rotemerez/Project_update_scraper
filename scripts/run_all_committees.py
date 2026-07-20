@@ -45,7 +45,7 @@ COMMITTEE_CONFIGS = [
     dict(
         committee='הראל',
         cities=['מבשרת ציון'],
-        projects_path='docs/all_projects_08072026.xlsx',
+        projects_path='docs/all_projects.xlsx',
         permits_path='outputs/harel_fresh.csv',
         city_hebrew='מבשרת ציון',
         output_path='outputs/harel_report.xlsx',
@@ -56,7 +56,7 @@ COMMITTEE_CONFIGS = [
     dict(
         committee='מיצפה אפק',
         cities=['באר יעקב'],
-        projects_path='docs/all_projects_08072026.xlsx',
+        projects_path='docs/all_projects.xlsx',
         permits_path='outputs/mitzpe_afek_fresh.csv',
         city_hebrew='באר יעקב',
         output_path='outputs/mitzpe_afek_report.xlsx',
@@ -67,7 +67,7 @@ COMMITTEE_CONFIGS = [
     dict(
         committee='זמורה',
         cities=['מזכרת בתיה'],
-        projects_path='docs/all_projects_08072026.xlsx',
+        projects_path='docs/all_projects.xlsx',
         permits_path='outputs/zmora_fresh.csv',
         city_hebrew='מזכרת בתיה',
         output_path='outputs/zmora_report.xlsx',
@@ -78,7 +78,7 @@ COMMITTEE_CONFIGS = [
     dict(
         committee='ישובי הברון',
         cities=['זכרון יעקב', 'אור עקיבא', 'בנימינה גבעת עדה', "ג'סר א זרקא"],
-        projects_path='docs/all_projects_08072026.xlsx',
+        projects_path='docs/all_projects.xlsx',
         permits_path='outputs/yishuvei_habaron_fresh.csv',
         city_hebrew='ישובי הברון',
         output_path='outputs/yishuvei_habaron_report.xlsx',
@@ -88,7 +88,7 @@ COMMITTEE_CONFIGS = [
     dict(
         committee='מורדות כרמל',
         cities=['טירת הכרמל', 'נשר'],
-        projects_path='docs/all_projects_08072026.xlsx',
+        projects_path='docs/all_projects.xlsx',
         permits_path='outputs/mordot_carmel_fresh.csv',
         city_hebrew='מורדות כרמל',
         output_path='outputs/mordot_carmel_report.xlsx',

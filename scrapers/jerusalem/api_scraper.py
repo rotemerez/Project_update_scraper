@@ -132,6 +132,31 @@ class JerusalemPermitsAPI:
         self._session.headers.update(_HEADERS)
         self._unmapped_statuses_seen = set()
 
+    # -- blocked-vs-not-found handling ---------------------------------------
+    #
+    # A raw fetch method returns (outcome, data): 'ok' means a genuine backend
+    # response (data may legitimately be empty -- a real "nothing here").
+    # 'blocked'/'error' means the request itself failed (WAF/rate-limit 403,
+    # timeout, malformed response) and tells us NOTHING about whether real
+    # data exists -- confirmed live 2026-07-17: a burst of concurrent requests
+    # tripped a 403 block on jerbasicserviceapi.jerusalem.muni.il that the
+    # sweep's miss-streak counter silently absorbed as hundreds of genuine
+    # "not found" results, corrupting an entire year's sweep. Every caller
+    # must treat blocked/error as inconclusive, never as a confirmed miss --
+    # same distinction already enforced in scrapers/tel_aviv/scraper.py.
+
+    def _with_retry(self, raw_fetch, label: str, max_retries: int = 3):
+        outcome, data = 'error', None
+        for attempt in range(1, max_retries + 1):
+            outcome, data = raw_fetch()
+            if outcome == 'ok':
+                return outcome, data
+            cooldown = min(30, 5 * attempt)
+            _log(f'  [RETRY {attempt}/{max_retries}] {label}: {outcome} -- backing off {cooldown}s')
+            time.sleep(cooldown)
+        _log(f'  [GIVE UP] {label} still {outcome} after {max_retries} retries -- inconclusive, not a confirmed miss')
+        return outcome, data
+
     def scrape_parcels(self, parcel_pairs: List[Tuple[str, str]]) -> List[Dict]:
         """
         Fetch רישוי בניה rows for each (gush, helka) pair, map to the common
@@ -140,8 +165,10 @@ class JerusalemPermitsAPI:
         """
         seen: Dict[str, Dict] = {}
         for gush, helka in parcel_pairs:
-            rows = self._fetch_rishui_bniya(gush, helka)
-            if rows is None:
+            outcome, rows = self._with_retry(
+                lambda: self._fetch_rishui_bniya(gush, helka), f'gush={gush} helka={helka}')
+            if outcome != 'ok':
+                _log(f'  [WARN] gush={gush} helka={helka}: giving up, not a confirmed empty result -- skipping')
                 continue
             for raw in rows:
                 permit = self._map_row(raw, gush, helka)
@@ -151,18 +178,23 @@ class JerusalemPermitsAPI:
             time.sleep(0.3)
         return self._enrich_with_pikuah(list(seen.values()))
 
-    def _fetch_rishui_bniya(self, gush, helka) -> Optional[List[Dict]]:
+    def _fetch_rishui_bniya(self, gush, helka) -> Tuple[str, List[Dict]]:
         params = {'street': '', 'house': '', 'gush': gush, 'helka': helka, 'taba': '', 'migrash': ''}
         try:
             resp = self._session.get(f'{GIS_HOST}{RISHUI_BNIYA_PATH}', params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            outcome = 'blocked' if status in (403, 429) else 'error'
+            _log(f'  [WARN] gush={gush} helka={helka}: {e}')
+            return outcome, []
         except Exception as e:
             _log(f'  [WARN] gush={gush} helka={helka}: {e}')
-            return None
+            return 'error', []
         if data.get('gisObjectName') != 'RishuiBniya':
             _log(f'  [WARN] gush={gush} helka={helka}: unexpected gisObjectName={data.get("gisObjectName")!r}')
-        return data.get('gisDataObject', [])
+        return 'ok', data.get('gisDataObject', [])
 
     def _map_row(self, raw: Dict, gush, helka) -> Dict:
         r_status = (raw.get('r_status', '') or '').strip()
@@ -195,17 +227,21 @@ class JerusalemPermitsAPI:
             tik_num = permit.pop('_tik_num', '')
             if not tik_num:
                 continue
-            stages = self._fetch_pikuah_stages(tik_num)
-            occ_status, occ_date = _pikuah_occupancy(stages)
-            if occ_status:
-                permit['permit_status'] = occ_status
-                permit['permit_status_date'] = occ_date
+            outcome, stages = self._with_retry(
+                lambda: self._fetch_pikuah_stages(tik_num), f'pikuah stages tik={tik_num}')
+            if outcome != 'ok':
+                _log(f'  [WARN] pikuah stages tik={tik_num}: giving up -- occupancy status left as-is, not confirmed absent')
+            else:
+                occ_status, occ_date = _pikuah_occupancy(stages)
+                if occ_status:
+                    permit['permit_status'] = occ_status
+                    permit['permit_status_date'] = occ_date
             if (i + 1) % 200 == 0:
                 _log(f'  [{i + 1}/{total}] pikuah stages fetched')
             time.sleep(0.2)
         return permits
 
-    def _fetch_pikuah_stages(self, tik_num: str) -> List[Dict]:
+    def _fetch_pikuah_stages(self, tik_num: str) -> Tuple[str, List[Dict]]:
         body = {
             'ProcName': PROC_PIKUAH_CONTENT,
             'Cnn': 'cnnGisYk',
@@ -214,10 +250,15 @@ class JerusalemPermitsAPI:
         try:
             resp = self._session.post(f'{API_HOST}{EXECUTE_GET_JSON_PATH}', json=body, timeout=30)
             resp.raise_for_status()
-            return resp.json() or []
+            return 'ok', (resp.json() or [])
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            outcome = 'blocked' if status in (403, 429) else 'error'
+            _log(f'  [WARN] pikuah stages tik={tik_num}: {e}')
+            return outcome, []
         except Exception as e:
             _log(f'  [WARN] pikuah stages tik={tik_num}: {e}')
-            return []
+            return 'error', []
 
     def sweep_by_tik_number(self, years: List[int], max_number: int = 9999,
                              sub_indices: Tuple[int, ...] = (0, 1),
@@ -242,21 +283,39 @@ class JerusalemPermitsAPI:
         full_address are left blank rather than guessed, and scrape_status is
         always 'partial' so these rows are visibly flagged for manual
         parcel lookup before they can be matched against tracked projects.
+
+        A blocked/error fetch (WAF rate-limit, timeout) is retried with
+        backoff and, if still unresolved, treated as INCONCLUSIVE -- it
+        affects the miss streak neither way (not a hit, not a miss). Every
+        inconclusive תיק number is logged (`[GIVE UP]` per number, a summary
+        count at the end) for manual re-checking, rather than being silently
+        absorbed as a genuine "not found" the way a plain empty-list return
+        would be. Confirmed live 2026-07-17: a rate-limit block produced
+        hundreds of real 403s that the old code counted as consecutive
+        misses, ending two years' sweeps early on fabricated "nothing here"
+        data.
         """
         known_tik_nums = known_tik_nums or set()
         results: List[Dict] = []
+        inconclusive: List[str] = []
         for year in years:
             streak = 0
             found_count = 0
             for number in range(1, max_number + 1):
                 hit_this_number = False
+                any_inconclusive = False
                 for sub in sub_indices:
                     tik_num = f'{year}/{number:04d}.{sub:02d}'
                     if tik_num in known_tik_nums:
                         hit_this_number = True
                         continue
-                    rows = self._fetch_tik_rushi(tik_num)
+                    outcome, rows = self._with_retry(
+                        lambda: self._fetch_tik_rushi(tik_num), f'tikRushi {tik_num}')
                     time.sleep(0.2)
+                    if outcome != 'ok':
+                        any_inconclusive = True
+                        inconclusive.append(tik_num)
+                        continue
                     if not rows:
                         continue  # this sub-index doesn't exist -- a later one still might
                                   # (e.g. old filings that start at .01 with no .00, see docstring)
@@ -266,6 +325,8 @@ class JerusalemPermitsAPI:
                         found_count += 1
                 if hit_this_number:
                     streak = 0
+                elif any_inconclusive:
+                    pass  # inconclusive -- doesn't count toward the streak either way
                 else:
                     streak += 1
                     if streak >= miss_streak_limit:
@@ -274,9 +335,12 @@ class JerusalemPermitsAPI:
                         break
             else:
                 _log(f'  [{year}] reached max_number={max_number} ({found_count} found this year)')
+        if inconclusive:
+            _log(f'[WARN] {len(inconclusive)} תיק numbers were inconclusive (blocked/error even after '
+                 f'retries) across the whole sweep -- re-check these manually, they are NOT confirmed misses')
         return results
 
-    def _fetch_tik_rushi(self, mispar_tik: str) -> List[Dict]:
+    def _fetch_tik_rushi(self, mispar_tik: str) -> Tuple[str, List[Dict]]:
         body = {
             'ProcName': PROC_TIK_RUSHI,
             'Cnn': 'cnnGisYk',
@@ -289,10 +353,15 @@ class JerusalemPermitsAPI:
         try:
             resp = self._session.post(f'{API_HOST}{EXECUTE_GET_JSON_PATH}', json=body, timeout=30)
             resp.raise_for_status()
-            return resp.json() or []
+            return 'ok', (resp.json() or [])
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            outcome = 'blocked' if status in (403, 429) else 'error'
+            _log(f'  [WARN] tikRushi {mispar_tik}: {e}')
+            return outcome, []
         except Exception as e:
             _log(f'  [WARN] tikRushi {mispar_tik}: {e}')
-            return []
+            return 'error', []
 
     def _map_thin_row(self, raw: Dict) -> Dict:
         status_text = (raw.get('teurStatus', '') or '').strip()

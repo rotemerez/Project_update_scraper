@@ -11,7 +11,7 @@ Run from project root after zmora_fresh.csv exists:
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/zmora_fresh.csv',
     city_hebrew='מזכרת בתיה',
     output_path='outputs/zmora_report.xlsx',

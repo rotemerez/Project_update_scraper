@@ -53,25 +53,29 @@ def match(project_name: str, scraped_address: str, city: str) -> bool:
     """
     True if project_name and scraped_address refer to the same address.
     city is used to strip the city suffix from both strings.
+
+    scraped_address may itself be a comma-joined list of addresses (e.g. a
+    corner building spanning two streets, seen in Tel Aviv's GIS permit
+    layer: "דרך שלמה 50, בן עטר 19") -- parsing the whole joined string as one
+    street would garble both. Each comma-separated segment is parsed and
+    matched independently; a match on any segment counts as a match.
     """
     if not project_name or not scraped_address:
         return False
 
     proj_text = _strip_city(str(project_name), city)
-    scrape_text = _strip_city(str(scraped_address), city)
-
     proj_street, proj_nums = _parse_street_and_numbers(proj_text)
-    scrape_street, scrape_nums = _parse_street_and_numbers(scrape_text)
-
-    if not proj_street or not scrape_street:
+    if not proj_street or not proj_nums:
         return False
 
-    if proj_street != scrape_street:
-        return False
+    for segment in str(scraped_address).split(','):
+        scrape_text = _strip_city(segment, city)
+        scrape_street, scrape_nums = _parse_street_and_numbers(scrape_text)
+        if not scrape_street or not scrape_nums:
+            continue
+        if proj_street != scrape_street:
+            continue
+        if any(n in proj_nums for n in scrape_nums):
+            return True
 
-    # Both streets match; require number confirmation on both sides.
-    # If either side has no parseable number, reject — street-only is too imprecise.
-    if not proj_nums or not scrape_nums:
-        return False
-
-    return any(n in proj_nums for n in scrape_nums)
+    return False

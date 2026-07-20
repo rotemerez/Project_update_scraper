@@ -1,5 +1,5 @@
 """
-Committee registry — maps every city in docs/all_projects_08072026.xlsx to its
+Committee registry — maps every city in docs/all_projects.xlsx to its
 planning portal scraper.
 
 Each entry represents one committee (one portal scrape run). Most entries cover

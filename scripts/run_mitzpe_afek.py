@@ -14,7 +14,7 @@ import pandas as pd
 import os
 
 CITY = 'באר יעקב'
-projects_path = 'docs/all_projects_08072026.xlsx'
+projects_path = 'docs/all_projects.xlsx'
 
 projects_df = pd.read_excel(projects_path)
 projects_df.columns = [c.strip() for c in projects_df.columns]

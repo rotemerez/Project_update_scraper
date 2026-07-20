@@ -19,7 +19,7 @@ up in the report.
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/jerusalem_fresh.csv',
     city_hebrew='ירושלים',
     output_path='outputs/jerusalem_report.xlsx',

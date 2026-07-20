@@ -32,7 +32,7 @@ from transform import gush_helka
 from transform.matcher import _compute_min_year
 
 CITY = 'ירושלים'
-projects_path = 'docs/all_projects_08072026.xlsx'
+projects_path = 'docs/all_projects.xlsx'
 RUN_SWEEP = True
 
 projects_df = pd.read_excel(projects_path)

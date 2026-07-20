@@ -40,7 +40,7 @@ import pandas as pd
 from scrapers.tel_aviv.scraper import TelAvivPermitsBrowserScraper
 
 CITY = 'תל אביב יפו'
-PROJECTS_PATH = 'docs/all_projects_08072026.xlsx'
+PROJECTS_PATH = 'docs/all_projects.xlsx'
 FRESH_PATH = 'outputs/tel_aviv_fresh.csv'
 PARCEL_LIMIT = 150  # validate at this scale first; raise/remove once confirmed stable
 

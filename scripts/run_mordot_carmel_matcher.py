@@ -11,7 +11,7 @@ Run from project root after mordot_carmel_fresh.csv exists:
 from transform.matcher import run
 
 run(
-    projects_path='docs/all_projects_08072026.xlsx',
+    projects_path='docs/all_projects.xlsx',
     permits_path='outputs/mordot_carmel_fresh.csv',
     city_hebrew='מורדות כרמל',
     output_path='outputs/mordot_carmel_report.xlsx',

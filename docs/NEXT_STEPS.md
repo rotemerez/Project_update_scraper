@@ -1,12 +1,123 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-16 (Session T)
+**Last Updated:** 2026-07-20 (Session U)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 111-row report); nationwide pipeline in progress
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 111-row report); אשקלון via Complot built + run + matcher (Session U, 40-row report); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report); nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session U — 2026-07-20
+
+- **Tel Aviv GIS-layer scraper built, full run, matcher done** — new approach discovered by Rotem:
+  Tel Aviv's `gisn.tel-aviv.gov.il` runs a genuine public ArcGIS Feature Layer (layer 772, "בקשות
+  והיתרי בניה") with no auth/reCAPTCHA, directly queryable via the standard `/query` REST API
+  (paginated, 10,538 total rows). This is a full replacement candidate for the paused
+  Selenium/reCAPTCHA scraper (`scrapers/tel_aviv/scraper.py`, still on hold).
+  - `scrapers/tel_aviv/gis_api_scraper.py` — paginates the whole layer, merges multi-building
+    request rows by `request_num`, derives `permit_status` from date fields directly
+    (`occupation`→טופס 4, `permission_date`→היתר, `open_request`→בקשה להיתר — no second API call
+    needed, unlike Jerusalem's פיקוח lookup).
+  - **Gush/helka resolved via a second discovery**: Rotem found the building layer (513) links to
+    a תיק בניין archive at `archive-binyan.tel-aviv.gov.il` → real host `handasa.tel-aviv.gov.il`.
+    Claude Desktop browser investigation found the underlying data call: a plain, anonymous WCF
+    REST endpoint (`_vti_bin/TlvSP2013PublicSite/TlvList.svc/GetListItemsByFieldFilterStringWithQuery`)
+    keyed by תיק בניין number, returning `EngFolderBlocksParcels` (`"{gush}_{helka},..."`). Verified
+    live, no auth needed, clean `[]` on unknown IDs. Only resolves ~26% of permits (2,281/8,898) —
+    the archive doesn't index every building — so `transform/address_match.py` was fixed to handle
+    comma-joined multi-address strings (each segment matched independently) as the fallback path
+    for the rest.
+  - **Full run**: 10,538 raw rows → 8,898 merged permits → `outputs/tel_aviv_gis_fresh.csv`.
+    Status: 4,994 היתר, 2,830 בקשה להיתר, 1,074 טופס 4.
+  - **Matcher run**: `outputs/tel_aviv_gis_report.xlsx` — 107 rows (24 status_advanced, 83 untracked,
+    0 new_permit/manual_review); cache 2,959 permits (`outputs/tel_aviv_gis_matched_cache.json`).
+  - **Not yet done**: spot-check a sample of status_advanced/untracked rows against reality
+    (standard due-diligence for a new scraper), especially address-matched (non-gush/helka) rows
+    since they carry most of the matching load here.
+
+- **Jerusalem sweep: blocked-vs-not-found bug found and fixed, sweep re-run**.
+  - Attempted the sweep (see Session T carryover) — hit a real IP/rate block on
+    `jerbasicserviceapi.jerusalem.muni.il` (492 consecutive 403s) after an accidental duplicate
+    process (a stale Start-Process launch a flawed liveness check had wrongly reported as exited)
+    doubled request volume. Killed both processes.
+  - **Root cause was a real bug, now fixed**: `_fetch_rishui_bniya()`, `_fetch_pikuah_stages()`,
+    `_fetch_tik_rushi()` in `scrapers/jerusalem/api_scraper.py` used to treat any request exception
+    (including a 403 block) as an ordinary empty result, feeding straight into `sweep_by_tik_number`'s
+    miss-streak counter — silently corrupting results with fabricated "nothing here" data. Fixed:
+    all three now return a 3-way `('ok'|'blocked'|'error', data)` outcome; a new `_with_retry()`
+    helper retries blocked/error with backoff and logs `[GIVE UP]` + an inconclusive-count summary
+    if still unresolved, rather than counting it as a miss. Same pattern already used in
+    `scrapers/tel_aviv/scraper.py`. Smoke-tested on both `scrape_parcels` and `sweep_by_tik_number`
+    paths — no regressions, real data confirmed.
+  - **Checked whether Jerusalem has a Tel-Aviv-style public ArcGIS layer** (the Sunday task from
+    Session T) — **negative result**. No `arcgis`/`esri`/`MapServer` references anywhere in the
+    ~1.8MB JS bundle or either backend host; Jerusalem's `jergisinfohub`/`jerbasicserviceapi` is a
+    genuinely custom system, unlike Tel Aviv's real Esri ArcGIS Server. Ruled out, not worth
+    revisiting without a new lead.
+  - **Sweep re-launched and completed** (single process, confirmed no stray processes first) — all
+    years 2005-2026 swept cleanly, no further 403s. **20,693 תיק rows found** →
+    `outputs/jerusalem_sweep.csv`. Per-year counts: 2005:1193, 2006:1122, 2007:980, 2008:911,
+    2009:996, 2010:1372, 2011:1383, 2012:1155, 2013:1333, 2014:1215, 2015:1043, 2016:1574,
+    2017:1164, 2018:902, 2019:608, 2020:754, 2021:496, 2022:533, 2023:552, 2024:560, 2025:520,
+    2026:327 (partial year). Results are necessarily partial (no gush/helka/address from
+    `fetchTikRushiData`'s schema) — **manual parcel lookup before matching is still not built**,
+    next session's task.
+
+- **אשקלון (Ashkelon) added — Complot, site_id=95**. Was already in `config/committees.py`
+  (active, never run). Smoke-tested first (6,848 unique permits found in list phase alone, clean),
+  then full run: `scripts/run_ashkelon.py` + `run_ashkelon_matcher.py` (same pattern as
+  `run_mordot_carmel.py`). **6,612 permits** → `outputs/ashkelon_fresh.csv` (min_year=2011
+  auto-computed). Double-yod check passed — all construction-type strings use single-yod
+  spelling consistently, already covered by `RELEVANT_TYPE_SUBSTRINGS`. **Matcher**:
+  `outputs/ashkelon_report.xlsx` — 40 rows (16 status_advanced, 24 untracked, 0
+  new_permit/manual_review); cache 525 permits (`outputs/ashkelon_matched_cache.json`). No
+  `permit_url_base` set yet (not confirmed for this committee).
+
+- **New `madlan_projects_fresh.csv` dropped by Rotem — converted, but a real scope discrepancy
+  found, NOT yet resolved**. Ran `scripts/fetch_projects.py --from-csv` → `outputs/madlan_projects_fresh.xlsx`
+  (45,484 rows, 23,207 unique project IDs — raw Looker "per stakeholder" grain, ~2 rows/project).
+  Compared against the currently-used `docs/all_projects_08072026.xlsx` (24,886 rows, 23,233 unique
+  projects, ~1 row/project — some dedup step produced this from the same raw shape, not present in
+  `fetch_projects.py`):
+  - Project-ID overlap is solid (23,152 shared, 81 dropped/55 added — normal week-to-week churn).
+  - **42 cities are completely missing from the new export** that are present in the old file —
+    not thin data, entirely absent. Pattern: mostly Judea/Samaria settlements (אורנית, אפרת, בית אל,
+    כפר קאסם, קרני שומרון, עמנואל, אלפי מנשה, צופים, ...) plus several Druze/Arab towns (דאלית
+    אל-כרמל, עראבה, סח'נין, כפר ברא, ...) and **קצרין** — one of the four committees already
+    flagged for a custom scraper (see below); if this narrower scope is real, that scraper would
+    have nothing to match against.
+  - **Not resolved**: is this an intentional scope change on the Looker dashboard, a permissions
+    difference on this particular export, or an export glitch? `docs/all_projects_08072026.xlsx`
+    was deliberately left untouched — do NOT swap it for the new file until this is confirmed with
+    whoever owns the Looker dashboard.
+  - **Automation built**: weekly refresh now auto-detects + auto-converts + auto-promotes.
+    Real constraint discovered first: the CSV export itself depends on the Claude Desktop Looker
+    MCP connector, which requires interactive auth and **cannot run in a headless/scheduled
+    context** (confirmed via this session's own MCP-server system context) — so full end-to-end
+    automation (no human ever touching this) would need real Looker API credentials
+    (`fetch_projects.py`'s already-built `from_sdk()` path). Absent that, built
+    `scripts/check_projects_refresh.py`: detects when `outputs/madlan_projects_fresh.csv` is newer
+    than the last-processed xlsx, converts it, runs the scope+grain sanity check (city coverage,
+    ID overlap, rows-per-project ratio), and **auto-promotes** over the production file only when
+    all checks pass — otherwise logs `[ALERT]` and leaves the production file untouched. Registered
+    as a daily Windows Scheduled Task (`MadlanProjectsRefreshCheck`, 8:00 AM,
+    `outputs/projects_refresh_check_log.txt`).
+  - **Root cause of the 42-missing-cities/doubled-row-count issues found and fixed (by Claude
+    Desktop, same day)**: a Looker LEFT JOIN was producing one spurious null-partner row per
+    project alongside real stakeholder rows, roughly doubling row count (45,639 rows for 23,305
+    projects instead of ~25,000) — separate from, and probably unrelated to, the one-off missing-
+    cities incident (which didn't recur on the next pull). Fixed by dropping null-partner rows for
+    projects that have at least one real stakeholder, while keeping them for the 1,086 projects
+    with no stakeholder at all. Verified: new export now 24,992 rows / 23,305 projects, matching
+    the production file's shape (24,886 / 23,233) almost exactly.
+  - **Production file renamed to remove the hardcoded date**: `docs/all_projects_08072026.xlsx` →
+    `docs/all_projects.xlsx` (git-tracked rename). Every script that referenced the old dated
+    filename (19 files: `config/committees.py`, every `run_*`/`run_*_matcher.py`) now points at the
+    stable name — this was the actual fix for "why do we need to touch 19 files every week": the
+    filename never needs to change again, only the file's contents (via the scheduled auto-promote
+    above). Historical mentions of the old filename in past session entries below and in
+    `docs/session_handoffs/` were deliberately left as-is (accurate record of what was true then).
 
 ### Session T — 2026-07-16
 
@@ -476,12 +587,48 @@ custom (not a disguised Complot/Bartech instance), see Session T write-up in Don
    (`RUN_SWEEP = True` is already set) or call `sweep_by_tik_number()` directly against the existing
    `outputs/jerusalem_fresh.csv`'s `request_number` set to skip re-scraping known parcels. Results
    are partial (no gush/helka/address) and need manual parcel lookup before matching.
+   - **[2026-07-17 attempt] Got IP/rate-blocked partway through, killed.** Standalone runner
+     `scripts/run_jerusalem_sweep.py` (new this session, reuses `jerusalem_fresh.csv`'s
+     `request_number`s as `known_tik_nums` so it doesn't re-scrape parcels) completed years 2005-2007
+     cleanly (1193/1122/978 found), but a **duplicate accidental second
+     process** (an earlier Start-Process launch that a flawed process-liveness check wrongly reported
+     as exited) ran concurrently against the same API from ~03:44-04:40, doubling request volume.
+     `jerbasicserviceapi.jerusalem.muni.il` started returning `403 Forbidden` on every single request
+     from 04:27:47 onward (492 consecutive 403s confirmed before the process was killed) — years
+     2008/2009's "0 found" / low counts in the log are **not real** (every request in that window was
+     blocked, not genuinely empty) and must be re-swept once unblocked.
+     - **Fixed (2026-07-18)**: `_fetch_tik_rushi()`, `_fetch_rishui_bniya()`, and `_fetch_pikuah_stages()`
+       in `scrapers/jerusalem/api_scraper.py` now return a 3-way `('ok'|'blocked'|'error', data)` outcome
+       instead of silently treating any request exception (including a 403 block) as an ordinary empty
+       result. A new `_with_retry()` helper retries blocked/error outcomes with backoff (up to 3 tries)
+       and logs `[GIVE UP]` + a final inconclusive-count summary if still unresolved, rather than feeding
+       them into the miss-streak counter as fake "not found" hits — same fix already applied to Tel
+       Aviv's Selenium scraper. Smoke-tested against both live paths (`sweep_by_tik_number` and
+       `scrape_parcels`'s `_fetch_rishui_bniya`) — both return real data, no regressions.
+     - **Block confirmed cleared (2026-07-18)** — direct test against `jerbasicserviceapi` returned the
+       known-good result for `2020/0440.00`. Sweep relaunched same day as a single process (checked
+       `Get-CimInstance` first for stray processes, per the lesson above) — years 2005-2007's results
+       from the killed run were never persisted (the script only writes the CSV once at the end), so
+       it's redoing the full sweep from scratch rather than resuming.
 2. Double-yod substring check against `RELEVANT_TYPE_SUBSTRINGS` on the full `sug_bakasha` output
    (comma-joined multi-value strings — matcher substring logic needs to handle that).
 3. Spot-check the "no request-category field" assumption flagged in
    `scripts/run_jerusalem_matcher.py` — confirm רישוי בניה search results never include
    preliminary/info-request stages that should've been excluded.
 4. Colleague's "gush/helka sometimes has +50 appended to the helka" note — not yet investigated.
+5. **[Sunday 2026-07-19] Check for a Jerusalem GIS-layer scrape method, same pattern as Tel Aviv.**
+   This session (2026-07-17) found that Tel Aviv has a public, unauthenticated ArcGIS Feature Layer
+   (`gisn.tel-aviv.gov.il/arcgis/rest/services/WM/IView2WM/MapServer/772`) exposing the entire
+   permit-request table directly — no reCAPTCHA, no per-parcel iteration, just paginated `/query`
+   calls — plus a separate WCF lookup resolving building → גוש/חלקה
+   (`handasa.tel-aviv.gov.il/_vti_bin/.../TlvList.svc`). See `scrapers/tel_aviv/gis_api_scraper.py`
+   for the full working implementation. Worth checking whether Jerusalem's municipality runs a
+   similar public ArcGIS/GIS backend (`ykpubdata.jerusalem.muni.il` is a React SPA — check for an
+   underlying MapServer the way `jergisinfohub`/`jerbasicserviceapi` were found via static JS bundle
+   analysis in Session T). If one exists and exposes the same רישוי בניה data as a queryable layer,
+   it could replace or complement the current custom REST scraper
+   (`scrapers/jerusalem/api_scraper.py`) — possibly avoiding the parcel-iteration requirement (no
+   citywide feed currently exists for Jerusalem) and the sequential תיק-number sweep entirely.
 
 For קצרין, the system still isn't identified at all — first session should be pure
 reconnaissance (view-source, network tab, robots.txt) with no scraper code written until

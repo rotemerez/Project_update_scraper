@@ -1,6 +1,54 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-16
+**Last Updated:** 2026-07-20
+
+---
+
+## BUG-022 — Jerusalem scraper: blocked/rate-limited requests silently counted as "not found"
+
+**Severity:** Critical — a WAF rate-limit block corrupted real scrape output with no error surfaced
+**Fixed in:** Session U (2026-07-20)
+**File:** `scrapers/jerusalem/api_scraper.py` → `_fetch_rishui_bniya()`, `_fetch_pikuah_stages()`,
+`_fetch_tik_rushi()`
+
+### Root cause
+
+All three fetch methods caught any request exception (network error, non-2xx HTTP status,
+including a WAF `403 Forbidden`) and simply returned an empty list — indistinguishable from a
+genuine "no permits at this parcel/תיק" result. `sweep_by_tik_number()`'s miss-streak counter
+had no way to tell the difference, so a block was silently absorbed as hundreds of consecutive
+real misses.
+
+This was triggered live: an accidental duplicate scrape process (a stale `Start-Process` launch
+that an earlier flawed liveness check had wrongly reported as exited) ran concurrently with the
+real sweep for about an hour, doubling request volume against `jerbasicserviceapi.jerusalem.muni.il`
+and tripping a rate-limit block — 492 consecutive `403 Forbidden` responses, all silently logged
+as "not found."
+
+### What broke
+
+Two years of the sweep (2008, 2009) reported suspiciously low/plausible-looking counts that were
+actually fabricated by the bug — every request in that window was blocked, not genuinely empty,
+but the miss-streak logic ended each year's sweep early on fake "nothing here" data exactly as if
+it had reached the real end of that year's תיקים.
+
+### Fix
+
+All three fetch methods now return a 3-way `('ok' | 'blocked' | 'error', data)` outcome — `'ok'`
+means a genuine backend response (data may legitimately be empty); `'blocked'`/`'error'` means the
+request itself failed and says nothing about whether real data exists. A new `_with_retry()`
+helper retries blocked/error outcomes with backoff (up to 3 tries) and logs `[GIVE UP]` +
+a final inconclusive-count summary if still unresolved — these numbers/תיקים are explicitly
+flagged as needing a manual re-check rather than being silently treated as confirmed misses.
+Same pattern already in use in `scrapers/tel_aviv/scraper.py`'s `_query()` (see BUG-021's
+neighboring context) — ported over rather than reinvented.
+
+### Prevention
+
+Any scraper with a retry-driven "stop after N consecutive misses" loop must classify a failed
+request as inconclusive, never as a miss. A caught exception returning an empty result looks
+identical to a genuine empty result to every caller downstream — the distinction has to be made
+at the point of the request, not inferred later.
 
 ---
 
