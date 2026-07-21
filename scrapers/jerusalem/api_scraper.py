@@ -29,6 +29,15 @@ captures from the office network on 2026-07-16:
        242700475 getProcessesTitlePikuahBniaData(TikNum)
        242700451 getProcessesContentData(SystemID, TikNum)  -- רישוי stage table
        242700448 getProcessesTitleData(SystemID, TikNum)
+       242700456 getGushimContentData(SystemId, TikNum) -- CONFIRMED LIVE (2026-07-20):
+                resolves a תיק number straight to gush/miHelka/adHelka. This is
+                the fix for sweep_by_tik_number()'s missing-parcel gap (see
+                below) -- found by grepping the JS bundle for proc IDs not yet
+                mapped here, after fetchTikRushiData turned out to have no
+                gush/helka field at all.
+       242700455 getKtovetContentData(systemId, tikNum) -- CONFIRMED LIVE: resolves
+                a תיק number to street name/house number/neighborhood --
+                the address-side fix for the same gap.
 
 Both hosts were transiently blocked by an Akamai WAF during initial recon
 (2026-07-16, non-office network) but responded fine on retest minutes later
@@ -41,11 +50,12 @@ search key (gush/helka, street, תיק number, or תב"ע number). Primary strat
 is to iterate (gush, helka) pairs already tracked in the projects export
 (scrape_parcels). A secondary sweep_by_tik_number() walks תיק numbers
 sequentially (format "YYYY/NNNN.SS", confirmed live) via fetchTikRushiData to
-catch permits not yet in the projects export -- but that proc's thin schema
+catch permits not yet in the projects export -- that proc's own schema
 (ID/tik_num/status_code/teurStatus/taarih_status/sugbakasha_code/
-teurSugbakasha/mahut_bakasha) has no gush/helka/address/mevakesh, so sweep
-results are necessarily partial (status only) until a parcel lookup can be
-cross-referenced by hand.
+teurSugbakasha/mahut_bakasha) has no gush/helka/address/mevakesh, so every hit
+is enriched with two more calls, getGushimContentData (gush/helka) and
+getKtovetContentData (street/house), keyed by the same תיק number -- no
+manual parcel lookup needed.
 
 Output schema (same as Complot/Bartech):
   request_number, request_date, full_address, city, block_lot, migrash,
@@ -68,6 +78,10 @@ EXECUTE_GET_JSON_PATH = '/api/Db/ExecuteGetJSON'
 
 PROC_PIKUAH_CONTENT = 242700473  # getProcessesContentPikuahBniaData(TikNum)
 PROC_TIK_RUSHI = 242700437       # fetchTikRushiData -- exact-match misparTik lookup
+PROC_GUSHIM_CONTENT = 242700456  # getGushimContentData(SystemId, TikNum) -- gush/helka
+PROC_KTOVET_CONTENT = 242700455  # getKtovetContentData(systemId, tikNum) -- street/house
+
+SYSTEM_ID = '26400046'  # fixed constant, same value used across all jerbasicserviceapi procs
 
 CITY = 'ירושלים'
 
@@ -278,11 +292,12 @@ class JerusalemPermitsAPI:
         first miss. Moves to the next year after miss_streak_limit consecutive
         numbers with zero hits across all subs.
 
-        Results are necessarily partial: fetchTikRushiData's schema has no
-        gush/helka/address/mevakesh (see module docstring) -- block_lot and
-        full_address are left blank rather than guessed, and scrape_status is
-        always 'partial' so these rows are visibly flagged for manual
-        parcel lookup before they can be matched against tracked projects.
+        Each hit is enriched with resolve_parcel() (getGushimContentData +
+        getKtovetContentData, keyed by the same תיק number) to fill in
+        block_lot/full_address -- fetchTikRushiData's own schema has neither
+        (see module docstring). If both calls come back inconclusive or
+        genuinely empty for a given תיק, block_lot/full_address are left
+        blank and scrape_status stays 'partial' rather than guessing.
 
         A blocked/error fetch (WAF rate-limit, timeout) is retried with
         backoff and, if still unresolved, treated as INCONCLUSIVE -- it
@@ -320,8 +335,9 @@ class JerusalemPermitsAPI:
                         continue  # this sub-index doesn't exist -- a later one still might
                                   # (e.g. old filings that start at .01 with no .00, see docstring)
                     hit_this_number = True
+                    block_lot, full_address = self.resolve_parcel(tik_num)
                     for raw in rows:
-                        results.append(self._map_thin_row(raw))
+                        results.append(self._map_thin_row(raw, block_lot, full_address))
                         found_count += 1
                 if hit_this_number:
                     streak = 0
@@ -347,7 +363,7 @@ class JerusalemPermitsAPI:
             'Parameters': {
                 'misparTik': mispar_tik, 'gush': None, 'helka': None,
                 'rehovCode': None, 'mispBait': None, 'mezahe': None,
-                'migrash': None, 'systemId': '26400046',
+                'migrash': None, 'systemId': SYSTEM_ID,
             },
         }
         try:
@@ -363,7 +379,83 @@ class JerusalemPermitsAPI:
             _log(f'  [WARN] tikRushi {mispar_tik}: {e}')
             return 'error', []
 
-    def _map_thin_row(self, raw: Dict) -> Dict:
+    def _fetch_gushim(self, tik_num: str) -> Tuple[str, List[Dict]]:
+        body = {
+            'ProcName': PROC_GUSHIM_CONTENT,
+            'Cnn': 'cnnGisYk',
+            'Parameters': {'SystemId': SYSTEM_ID, 'TikNum': tik_num},
+        }
+        try:
+            resp = self._session.post(f'{API_HOST}{EXECUTE_GET_JSON_PATH}', json=body, timeout=30)
+            resp.raise_for_status()
+            return 'ok', (resp.json() or [])
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            outcome = 'blocked' if status in (403, 429) else 'error'
+            _log(f'  [WARN] gushimContent tik={tik_num}: {e}')
+            return outcome, []
+        except Exception as e:
+            _log(f'  [WARN] gushimContent tik={tik_num}: {e}')
+            return 'error', []
+
+    def _fetch_ktovet(self, tik_num: str) -> Tuple[str, List[Dict]]:
+        body = {
+            'ProcName': PROC_KTOVET_CONTENT,
+            'Cnn': 'cnnGisYk',
+            'Parameters': {'systemId': SYSTEM_ID, 'tikNum': tik_num},
+        }
+        try:
+            resp = self._session.post(f'{API_HOST}{EXECUTE_GET_JSON_PATH}', json=body, timeout=30)
+            resp.raise_for_status()
+            return 'ok', (resp.json() or [])
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            outcome = 'blocked' if status in (403, 429) else 'error'
+            _log(f'  [WARN] ktovetContent tik={tik_num}: {e}')
+            return outcome, []
+        except Exception as e:
+            _log(f'  [WARN] ktovetContent tik={tik_num}: {e}')
+            return 'error', []
+
+    def resolve_parcel(self, tik_num: str) -> Tuple[str, str]:
+        """
+        Resolve a תיק number to (block_lot, full_address) via
+        getGushimContentData + getKtovetContentData. Either half can come back
+        empty (inconclusive after retry, or genuinely not indexed) -- returns
+        '' for that half rather than guessing, same as every other scraper
+        in this project.
+        """
+        block_lot = ''
+        outcome, gushim_rows = self._with_retry(
+            lambda: self._fetch_gushim(tik_num), f'gushimContent tik={tik_num}')
+        if outcome == 'ok' and gushim_rows:
+            pairs = []
+            for row in gushim_rows:
+                gush = row.get('gush')
+                mi, ad = row.get('miHelka'), row.get('adHelka')
+                if gush is None or mi is None:
+                    continue
+                if ad is not None and ad != mi:
+                    pairs.extend(f'{gush}-{h}' for h in range(int(mi), int(ad) + 1))
+                else:
+                    pairs.append(f'{gush}-{mi}')
+            block_lot = ';'.join(pairs)
+
+        full_address = ''
+        outcome, ktovet_rows = self._with_retry(
+            lambda: self._fetch_ktovet(tik_num), f'ktovetContent tik={tik_num}')
+        if outcome == 'ok' and ktovet_rows:
+            addresses = []
+            for row in ktovet_rows:
+                street = (row.get('rehovName', '') or '').strip()
+                house = (row.get('mispBait', '') or '').strip()
+                if street:
+                    addresses.append(f'{street} {house}'.strip())
+            full_address = ', '.join(addresses)
+
+        return block_lot, full_address
+
+    def _map_thin_row(self, raw: Dict, block_lot: str = '', full_address: str = '') -> Dict:
         status_text = (raw.get('teurStatus', '') or '').strip()
         if status_text and status_text not in STATUS_MAP and status_text not in self._unmapped_statuses_seen:
             self._unmapped_statuses_seen.add(status_text)
@@ -372,9 +464,9 @@ class JerusalemPermitsAPI:
         return {
             'request_number':      raw.get('tik_num', '') or '',
             'request_date':        '',  # not in this endpoint's schema -- see module docstring
-            'full_address':        '',
+            'full_address':        full_address,
             'city':                CITY,
-            'block_lot':           '',
+            'block_lot':           block_lot,
             'migrash':             '',
             'request_type':        raw.get('teurSugbakasha', '') or '',
             'request_category':    '',
@@ -384,7 +476,7 @@ class JerusalemPermitsAPI:
             'unit_count':          '',
             'permit_status':       STATUS_MAP.get(status_text, ''),
             'permit_status_date':  raw.get('taarih_status', '') or '',
-            'scrape_status':       'partial',  # always -- no parcel/address data from this endpoint
+            'scrape_status':       'success' if (block_lot or full_address) else 'partial',
         }
 
 

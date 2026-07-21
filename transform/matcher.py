@@ -65,6 +65,11 @@ RELEVANT_TYPE_SUBSTRINGS = [
     'תיקון 139',      # urban renewal programme
     'שימור',          # preservation projects (tracked when they add units)
     'צמודי קרקע',    # attached housing -- 4+ units by same developer
+    'ביטול היתר ובנייה מחדש',  # permit cancellation + rebuild -- effectively new construction
+                               # (confirmed by Rotem 2026-07-20 against Ashkelon examples)
+    'תוספת יח"ד באמצעות תוספת בניה',  # unit addition via building extension -- can be
+                               # substantial (one Jerusalem sample: 19 units added), confirmed
+                               # by Rotem 2026-07-20 against real mahutBakasha descriptions
 ]
 
 

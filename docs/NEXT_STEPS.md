@@ -1,12 +1,66 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-20 (Session U)
+**Last Updated:** 2026-07-20 (Session V)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 111-row report); אשקלון via Complot built + run + matcher (Session U, 40-row report); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report); nationwide pipeline in progress
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 61-row report as of Session V) + sweep enrichment (Session V, 18,871/20,693 parcels resolved); אשקלון via Complot built + run + matcher (Session U, 43-row report as of Session V, permit_url_base confirmed); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report); nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session V — 2026-07-20
+
+- **Jerusalem sweep parcel-resolution gap closed — the "manual parcel lookup" blocker from Session
+  U is gone.** `sweep_by_tik_number()`'s hits had no gush/helka/address because `fetchTikRushiData`'s
+  schema doesn't carry them. Grepped `outputs/debug_jerusalem_main.js` for proc IDs not yet mapped
+  in `scrapers/jerusalem/api_scraper.py`'s docstring and found two live, working ones:
+  `getGushimContentData` (242700456, `{SystemId, TikNum}` → gush/miHelka/adHelka) and
+  `getKtovetContentData` (242700455, `{systemId, tikNum}` → street/house/neighborhood). Both
+  confirmed live against real תיק numbers. Added `resolve_parcel(tik_num)` to
+  `JerusalemPermitsAPI`, wired into `sweep_by_tik_number()` for future sweeps (marks
+  `scrape_status='success'` when either resolves, instead of always `'partial'`).
+  - **Enriched the existing 20,693-row `outputs/jerusalem_sweep.csv`** via new
+    `scripts/enrich_jerusalem_sweep.py` (resumable, checkpoints every 200 rows) run in the
+    background: **18,871/20,693 rows (91.2%) now have block_lot/full_address**. Remaining 1,822
+    are genuinely not indexed in Jerusalem's own gushim/ktovet system (same pattern seen in a live
+    spot-check sample, ~25% miss rate there too).
+    - Hit a ~2.5hr DNS-resolution outage mid-run (`jerbasicserviceapi.jerusalem.muni.il` failed to
+      resolve, not a WAF/rate-limit block) — the existing `_with_retry()`/blocked-vs-error handling
+      caught it correctly: one תיק (`2019/0350.00`) logged `[GIVE UP]` as inconclusive rather than a
+      fabricated miss, process stayed alive, resumed normal ~80 rows/min pace once the network
+      recovered. That one תיק was manually re-resolved after the run finished (`30173-116;30173-33`,
+      `רשב"ג 20`) — now fully resolved too.
+  - Sweep CSV is now ready to feed into the matcher (previously blocked entirely on this gap).
+
+- **אשקלון `permit_url_base` confirmed** (Rotem provided a real permit URL:
+  `https://ashkelon.complot.co.il/newengine/Pages/request2.aspx#request/20160086` — same
+  `request_number` format as `outputs/ashkelon_fresh.csv`). Wired into `config/committees.py`,
+  `scripts/run_ashkelon_matcher.py`, and added a new entry to `run_all_committees.py`'s
+  `COMMITTEE_CONFIGS` (previously excluded from the consolidated report pending this). Matcher
+  re-run, `request_url` column confirmed populated correctly.
+
+- **`RELEVANT_TYPE_SUBSTRINGS` gained two new tracked construction types**, both confirmed against
+  real sample permits before adding (same due-diligence pattern as the double-yod checklist in
+  CLAUDE.md):
+  - **`ביטול היתר ובנייה מחדש`** (permit cancellation + rebuild) — 6 occurrences in Ashkelon,
+    confirmed by Rotem as effectively new construction. Ashkelon matcher re-run: 42→43 report rows.
+  - **`תוספת יח"ד באמצעות תוספת בניה`** (unit addition via building extension) — found while doing
+    the Session T double-yod carryover check (no actual double-yod bug found; the substring
+    matching handles the comma-joined `sug_bakasha` format fine). 486 occurrences across Jerusalem's
+    two datasets (192 in `jerusalem_fresh.csv`, 294 in `jerusalem_sweep.csv`), 465 previously
+    **entirely invisible** to the matcher (not just filtered — never even recognized as relevant).
+    Pulled real `mahutBakasha` descriptions via `getTeurHabakashaContentData` (242700447) for 5
+    sample permits before adding — one was a genuine 19-unit addition. Jerusalem matcher re-run:
+    all 5 samples now appear in `matched_cache` (4,270 permits, up from 3,611); full report now 61
+    rows (52 status_advanced, 3 untracked, 6 new_permit) — not a clean before/after of just this
+    change since `docs/all_projects.xlsx` was also refreshed multiple times since Session T.
+  - **Explicitly decided against** extending `_is_below_unit_minimum()` to also check
+    `shimush_ikari` for `צמודי קרקע` (currently only checks `request_type`) — Rotem's call: land-use
+    tag alone doesn't tell us unit count, not enough information to act on.
+
+- **Session T carryover item 2** (Jerusalem's "no request-category field" assumption) — explicitly
+  reviewed and left open per Rotem's call; still needs a manual spot-check of report rows against
+  the assumption in `scripts/run_jerusalem_matcher.py`'s docstring.
 
 ### Session U — 2026-07-20
 
@@ -581,6 +635,9 @@ answered.
 **ירושלים identified, scraper built, full run + matcher done (Session T, 2026-07-16)** — genuinely
 custom (not a disguised Complot/Bartech instance), see Session T write-up in Done and
 `scrapers/jerusalem/api_scraper.py` docstring for the full API mapping. Remaining work:
+1. ~~Run the sequential תיק-number sweep~~ — **DONE (Session U, re-run completed 20,693 rows;
+   Session V enriched 18,871/20,693 with block_lot/full_address — manual parcel lookup gap closed,
+   see Session V write-up in Done above).** Original text kept below for history.
 1. **Run the sequential תיק-number sweep** (`JerusalemPermitsAPI.sweep_by_tik_number()`, built and
    unit-tested this session but never run as part of a full scrape — the completed full run predates
    this code, see Session T for why). Either re-run `scripts/run_jerusalem.py` end-to-end
@@ -610,13 +667,19 @@ custom (not a disguised Complot/Bartech instance), see Session T write-up in Don
        `Get-CimInstance` first for stray processes, per the lesson above) — years 2005-2007's results
        from the killed run were never persisted (the script only writes the CSV once at the end), so
        it's redoing the full sweep from scratch rather than resuming.
-2. Double-yod substring check against `RELEVANT_TYPE_SUBSTRINGS` on the full `sug_bakasha` output
-   (comma-joined multi-value strings — matcher substring logic needs to handle that).
+2. ~~Double-yod substring check against `RELEVANT_TYPE_SUBSTRINGS`~~ — **DONE (Session V)**: no
+   actual double-yod bug found (comma-joined `sug_bakasha` substring matching works fine), but
+   surfaced a genuine new tracked-type gap (`תוספת יח"ד באמצעות תוספת בניה`, 486 occurrences) — now
+   added to `RELEVANT_TYPE_SUBSTRINGS`, see Session V write-up in Done above.
 3. Spot-check the "no request-category field" assumption flagged in
    `scripts/run_jerusalem_matcher.py` — confirm רישוי בניה search results never include
-   preliminary/info-request stages that should've been excluded.
+   preliminary/info-request stages that should've been excluded. **Still open (Session V: reviewed
+   and explicitly left for a future session, per Rotem).**
 4. Colleague's "gush/helka sometimes has +50 appended to the helka" note — not yet investigated.
-5. **[Sunday 2026-07-19] Check for a Jerusalem GIS-layer scrape method, same pattern as Tel Aviv.**
+5. **[Sunday 2026-07-19] Check for a Jerusalem GIS-layer scrape method, same pattern as Tel Aviv** —
+   **DONE (Session U): negative result**, no ArcGIS/Esri references found anywhere in Jerusalem's
+   JS bundle or backend hosts; genuinely custom system, ruled out. Original text kept below for
+   history.
    This session (2026-07-17) found that Tel Aviv has a public, unauthenticated ArcGIS Feature Layer
    (`gisn.tel-aviv.gov.il/arcgis/rest/services/WM/IView2WM/MapServer/772`) exposing the entire
    permit-request table directly — no reCAPTCHA, no per-parcel iteration, just paginated `/query`

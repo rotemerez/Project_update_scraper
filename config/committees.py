@@ -373,7 +373,7 @@ _COMPLOT = [
         'scraper': 'complot',
         'site_id': 95,
         'base_url': None,
-        'permit_url_base': None,
+        'permit_url_base': 'https://ashkelon.complot.co.il/newengine/Pages/request2.aspx#request/',
         'include_bakasha_meqdamit': False,
         'exclude': False,
         'exclude_reason': None,

@@ -96,6 +96,17 @@ COMMITTEE_CONFIGS = [
         permit_url_base='https://mordotcarmel.org/iturbakashot/#request/',
         city_filter=['טירת הכרמל', 'נשר'],
     ),
+    dict(
+        committee='אשקלון',
+        cities=['אשקלון'],
+        projects_path='docs/all_projects.xlsx',
+        permits_path='outputs/ashkelon_fresh.csv',
+        city_hebrew='אשקלון',
+        output_path='outputs/ashkelon_report.xlsx',
+        matched_cache_path='outputs/ashkelon_matched_cache.json',
+        permit_url_base='https://ashkelon.complot.co.il/newengine/Pages/request2.aspx#request/',
+        city_filter=['אשקלון'],
+    ),
 ]
 
 FLAG_ORDER = ['status_advanced', 'new_permit', 'untracked', 'manual_review']
