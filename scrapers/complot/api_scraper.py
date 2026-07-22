@@ -44,7 +44,6 @@ EVENT_TO_STATUS: Dict[str, str] = {
     'מסירת תעודת גמר':                                             'טופס 4',
     'תעודת גמר':                                                   'טופס 4',  # standalone — catch-all after more specific variants
     'הפקת טופס 4 מותלה':                                           'טופס 4',
-    'הפקת טופס 4 להרצת מערכות':                                    'טופס 4',  # partial — also catches longer variant
     'הפקת טופס נלווה לטופס 4':                                     'טופס 4',
     'הפקת טופס 4':                                                  'טופס 4',
     'מסירת טופס 4':                                                 'טופס 4',
@@ -365,6 +364,7 @@ _UNMAPPED_EVENTS = {
     'העברת הבקשה לפיקוח לאחר החלטה', 'הבקשה נמצאת במסלול עם מכון בקרה', 'קבלת תכנית שינויים לבדיקה',
     'היתר שינויים בסמכות מהנדס חתום.', 'תכנית בינוי מאושרת', 'חתימת תוכנית השינויים ע"י המהנדסת',
     'הבקשה אינה עומדת בתנאי סף', 'הגשת בקשה מתוקנת לוועדה', 'הפקת אישור הרצת מערכות', 'מסירת אישור הרצת מערכות',
+    'הפקת טופס 4 להרצת מערכות',  # systems commissioning checkpoint, not real טופס 4 -- see _map_event()
     'מודד-סימון קווי בנין+0.00', 'מסירת טופס 2 להרצת מערכות בלבד', 'הגשת מפה מצבית', 'הכנת תיק לדיון בועדה',
     'בקרה מרחבית אינה תקינה', 'מסמך פנימי', 'דוח פיקוח יזום', 'התחלת בניה וגידור', 'ממתין להשלמות',
     'הארכת תוקף החלטת ועדה', 'הודעה על פרסום שימוש חורג', 'התכתבות', 'להוריד מסדר יום', 'חידוש היתר',
@@ -419,6 +419,13 @@ def _log(msg: str):
 
 
 def _map_event(event: str) -> str:
+    # "הרצת מערכות" (systems commissioning/trial-run) is a pre-occupancy technical checkpoint,
+    # not a real milestone -- confirmed by colleague review (Ashkelon permit 20220897, 2026-07-22)
+    # that a 'הפקת טופס 4 להרצת מערכות' event does NOT mean the building reached true טופס 4
+    # (occupancy/completion). Checked before the substring loop so it can never fall through to
+    # a less-specific 'טופס 4' key.
+    if 'הרצת מערכות' in event:
+        return ''
     for keyword, status in EVENT_TO_STATUS.items():
         if keyword in event:
             return status

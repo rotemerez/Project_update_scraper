@@ -1,12 +1,31 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-20 (Session V)
+**Last Updated:** 2026-07-22 (Session W)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
-**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera via Bartech; ירושלים custom scraper built + full run + matcher (Session T, 61-row report as of Session V) + sweep enrichment (Session V, 18,871/20,693 parcels resolved); אשקלון via Complot built + run + matcher (Session U, 43-row report as of Session V, permit_url_base confirmed); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report); nationwide pipeline in progress
+**Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera + Harel + Zmora + Mitzpe Afek
+via Bartech (all 6 rescraped-and-date-corrected as of Session W); ירושלים custom scraper built +
+full run + matcher (Session T, 61-row report as of Session V) + sweep enrichment (Session V,
+18,871/20,693 parcels resolved); אשקלון via Complot built + run + matcher (Session U, 53-row
+report as of Session W, permit_url_base confirmed); מורדות כרמל Complot triage confirmed final
+(Session W); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report);
+nationwide pipeline in progress
 
 ---
 
 ## Done
+
+### Session W — 2026-07-22
+
+Colleague's Ashkelon manual review drove a deep investigation: found and fixed BUG-023 (public-use
+plural gap + 2 missing Ashkelon high-rise construction types), BUG-024 (`הרצת מערכות` wrongly
+mapped to real `טופס 4`), and a related unit-minimum spelling gap; added 7 more construction types
+after colleague confirmation; ran a targeted BUG-020 date-correction pass across all 6 Bartech
+cities (7,695 dates corrected); ran a targeted BUG-024 re-check on Ashkelon + Mordot Carmel (5
+Ashkelon permits corrected, 4 downgraded from false-positive `טופס 4`); closed the long-open
+Complot triage backlog as final (colleague's export fully matches the current code already — no
+new classifications, 2026-07-22). Full detail in
+`docs/session_handoffs/SESSION_HANDOFF_2026_07_22_A.md` and `docs/BUG_REFERENCE.md` (BUG-023,
+BUG-024).
 
 ### Session V — 2026-07-20
 
@@ -531,23 +550,22 @@
 
 ## Immediate — Do First Next Session
 
-### 1. Complot triage artifact — colleagues to finish classifying
+### 1. ~~Complot triage artifact — colleagues to finish classifying~~ — CLOSED (2026-07-22)
 
-Rebuilt to match the Bartech/Hadera design (table + dropdown + localStorage + search + bulk-ignore),
-plus a handoff mechanism ("Hand off to next person" / "Continue from handoff" — copies/pastes a JSON
-code so progress carries across colleagues' separate browsers, since localStorage doesn't sync
-between people). Link shared with colleagues directly (not stored here since it's colleague-private).
+Rotem confirmed `docs/Request Status's- Claude (1).docx` is the **final** colleague mapping —
+whatever isn't explicitly given a status in it should NOT be attributed to a permit stage
+(stays unmapped). Verified: all 121 entries in that document (2 `EVENT_TO_STATUS`, ~99
+`_UNMAPPED_EVENTS`, ~13 `_MANUAL_REVIEW_EVENTS`) already exactly match what's in
+`scrapers/complot/api_scraper.py` — this is the same export applied back in Session O
+(2026-07-15/16), not a newer one. No code change needed; the backlog is considered resolved as
+final, not merely paused.
 
-**138 unique events total**, only 22 pre-classified. ~116 still need triage, including the 2 flagged
-last session:
-- `מסירת אישור הרצת מערכות` (23 occurrences) — likely `היתר`
-- `הפקת אישור הרצת מערכות` (26 occurrences) — likely `היתר`
-
-Once classification is done, get the final Python export from whoever finishes and paste the new
-`EVENT_TO_STATUS` / `_UNMAPPED_EVENTS` / `_MANUAL_REVIEW_EVENTS` entries into
-`scrapers/complot/api_scraper.py`, then **re-run the mordot carmel matcher** — the report below was
-generated with only 22/138 events classified, so some `untracked`/`manual_review` rows may reclassify
-to `status_advanced` once the rest are triaged.
+The 2 events flagged in earlier sessions as still needing a guess — `מסירת אישור הרצת מערכות`
+(23 occurrences) and `הפקת אישור הרצת מערכות` (26 occurrences), previously noted as "likely →
+היתר" — are confirmed to stay **unmapped** per the final mapping, not היתר. This lines up with
+BUG-024 (see `docs/BUG_REFERENCE.md`): `_map_event()` now explicitly ignores any `הרצת מערכות`
+phrasing regardless of classification, since it's a pre-occupancy technical checkpoint, not a
+real milestone.
 
 ### 2. ~~Rescrape + re-run matcher for existing Bartech cities (migrash fix)~~ — DONE (Session S, 2026-07-16)
 
@@ -556,13 +574,15 @@ per-city verification notes are in Session S (Done, above). Zmora's fix effect w
 individually verified; the others were spot-checked less deeply — worth a closer look if their
 `untracked` counts look off in review.
 
-**Follow-up now needed**: BUG-020 (wrong-track `permit_status_date`, see Done above and
-`docs/BUG_REFERENCE.md`) was fixed in `scrapers/bartech/api_scraper.py` *after* all 6 rescrapes
-above already completed — so their `*_fresh.csv`/`*_report.xlsx` files may still have wrong dates
-on any permit where multiple stage tracks (e.g. permit-issuance vs. work-commencement) reach the
-same status at different dates. Only affects dates, not status/matching/flag correctness. Lower
-urgency than a full rescrape — could re-run just the detail-fetch phase (`_enrich_with_details`)
-against already-known permit numbers rather than a full list-phase rescrape, if that's faster.
+**Follow-up — DONE (2026-07-22)**: BUG-020 dates corrected via a targeted re-enrichment
+(`scripts/reenrich_bartech_dates.py`) that re-fetched only the `היתר`/`טופס 4` detail pages
+(the two statuses `_parse_certificates()` can override) for all 6 cities, reconstructing each
+permit's `definement_type` from its saved `request_category` label instead of redoing the list
+phase. Correction counts: הולון 4,654/5,096 (91%), קריות 841/1,391 (60%), חדרה 204/2,260 (9%),
+הראל 322/479 (67%), זמורה 373/779 (48%), מיצפה אפק 1,301/1,641 (79%) — **7,695 dates corrected
+total**. All 6 matchers re-run; report row counts barely moved (this bug only ever fixed the date
+on an already-correctly-ranked status, never which milestone was reached). Pre-fix backups kept at
+`outputs/{city}_fresh_pre_bug020.csv`.
 
 ### 3. Tel Aviv reCAPTCHA throttling — ON HOLD (Rotem's call, 2026-07-16), full findings below
 
@@ -869,7 +889,7 @@ the real search UI (not direct API calls with a replayed token).
 
 | Committee | Report | Key figures |
 |---|---|---|
-| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — **run with only 22/138 events classified; Complot triage export now added (Session S) but matcher not yet re-run, see item #1** |
+| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — triage confirmed **final** and already fully applied (2026-07-22, see item #1); no reclassification pending |
 | קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review — pre-migrash-fix; consider re-scraping to pick up BUG-019 fix like the Bartech cities were |
 | הולון | `outputs/holon_report.xlsx` | 42 status_advanced, 36 untracked, 0 manual_review (rescraped Session S) |
 | קריות | `outputs/krayot_report.xlsx` | 36 status_advanced, 14 untracked, 0 manual_review (rescraped Session S) |
@@ -961,6 +981,21 @@ After the manual-review cycle is validated:
 - Build `transform/mapper.py` (scraped fields → backoffice payload)
 - Tie into matcher output for auto-update of `status_advanced` projects
 - `new_permit` and `untracked` still require human sign-off before creation
+
+### 10. Add projects from local-committee + מבא"ת (mavat) land-use plan searches
+
+**Not to be started until local committee permit scraping + matching is fully honed** (V1/V2 above
+stable, low noise). A further-out project-discovery source, separate from permit tracking:
+
+Use local planning committee searches and מבא"ת (mavat) plan searches to surface new projects
+directly from land-use plan approvals/deposits, rather than waiting for a building permit to be
+filed against a project we already track. This would let us catch genuinely new projects earlier
+in their lifecycle (plan stage, before any permit request exists) instead of relying entirely on
+the permit-side `untracked`/`new_permit` flags in the current matcher.
+
+Methodology to reuse: the plan-search approach currently being developed in the separate
+`projects_monitor` project — check there for the current state of that work before designing this
+from scratch.
 
 ---
 

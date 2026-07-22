@@ -70,6 +70,26 @@ RELEVANT_TYPE_SUBSTRINGS = [
     'תוספת יח"ד באמצעות תוספת בניה',  # unit addition via building extension -- can be
                                # substantial (one Jerusalem sample: 19 units added), confirmed
                                # by Rotem 2026-07-20 against real mahutBakasha descriptions
+    'בניה רוייה מעל 10 קומות',  # Ashkelon high-rise residential (samples: 26-72 units,
+                               # shimush_ikari='מגורים חדש -רוויה'), confirmed by Rotem 2026-07-21
+    'מבנה מגורים+מסחר מעל 10 ק',  # Ashkelon high-rise residential+commercial (samples: 47-154
+                               # units), confirmed by Rotem 2026-07-21
+    'מבנה מגורים משולב במסחר',  # Ashkelon mixed residential+commercial, confirmed by Rotem
+                               # 2026-07-21 -- unit-count filter applies where available
+    'מסחר ומגורים',            # Mordot Carmel mixed residential+commercial, confirmed by Rotem
+                               # 2026-07-21 -- unit-count filter applies where available
+    'הקמת בית מגורים חדש',     # Mordot Carmel new residential building, confirmed by Rotem
+                               # 2026-07-21 -- unit-count filter applies where available
+    'בית מגורים  משותף + מסחר',  # Mordot Carmel mixed residential+commercial (note double
+                               # space as scraped), confirmed by Rotem 2026-07-21
+    'בנין מגורים צמוד קרקע חדש',  # Ramat Gan new attached-housing building, confirmed by
+                               # Rotem 2026-07-21 -- 4-unit landed-housing minimum applies
+    'מגורים:צמוד קרקע',        # Bat Yam attached-housing, confirmed by Rotem 2026-07-21 --
+                               # 4-unit landed-housing minimum applies
+    'מבנה מגורים 2 יחידות דיור',  # Harel -- a fixed municipal category label, not a literal
+                               # per-permit count (one sample scraped unit_count=4 despite the
+                               # "2" in the label); filtered by real unit_count, confirmed by
+                               # Rotem 2026-07-21
 ]
 
 
@@ -82,7 +102,8 @@ def _is_relevant_type(request_type: str) -> bool:
 # Source: נוהל הקמת פרויקטים — "מבני ציבור (גני ילדים, בתי כנסת...) - לא נתייחס"
 # Checked against shimush_ikari first; falls back to bakasha_description keyword scan.
 _PUBLIC_USE_PATTERNS = [
-    'מבנה ציבור', 'מבנה טכני', 'מוסד חינוכי', 'מוסדות חינוך', 'בית ספר', "בי\"ס",
+    'מבנה ציבור', 'מבני ציבור',  # singular/plural variants -- Ashkelon/Holon use the plural
+    'מבנה טכני', 'מוסד חינוכי', 'מוסדות חינוך', 'בית ספר', "בי\"ס",
     'גן ילדים', 'בית כנסת', 'בית כנסיה', 'כנסיה', 'מסגד', 'מדרשה',
     'אולם ספורט', 'בריכה', 'בית חולים', 'מרפאה',
     'בית עלמין', 'תחנת דלק', 'בנין ציבורי',
@@ -157,7 +178,7 @@ def _is_below_unit_minimum(permit: pd.Series) -> bool:
     if units is None:
         return False  # can't determine — let through
 
-    if 'צמודי קרקע' in request_type:
+    if 'צמודי קרקע' in request_type or 'צמוד קרקע' in request_type:
         return units < 4
     return units < 3
 

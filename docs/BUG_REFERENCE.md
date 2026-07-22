@@ -1,6 +1,101 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-20
+**Last Updated:** 2026-07-22
+
+---
+
+## BUG-024 — Complot: `הפקת טופס 4 להרצת מערכות` (systems commissioning) wrongly mapped to real `טופס 4`
+
+**Severity:** Medium — inflated a permit's status to full building completion when it was only a
+pre-occupancy technical checkpoint
+**Fixed:** 2026-07-22
+**File:** `scrapers/complot/api_scraper.py` → `EVENT_TO_STATUS`, `_map_event()`, `_UNMAPPED_EVENTS`
+
+### Root cause
+
+`EVENT_TO_STATUS` mapped `'הפקת טופס 4 להרצת מערכות'` → `'טופס 4'`, treating a systems
+commissioning/trial-run certificate (issued before a building is actually occupied) as equivalent
+to the real occupancy/completion `טופס 4`. Found via colleague manual review of the Ashkelon
+report: permit `20220897` (project `החלוץ_פינת_דוד_רמז_אשקלון`) was correctly matched but flagged
+*"מדובר על טופס 4 להרצת מערכות בלבד ולא טופס 4 לאכלוס/ תעודת גמר"*. This confirms the open Session
+V triage item — the sibling events `מסירת אישור הרצת מערכות` / `הפקת אישור הרצת מערכות` (23/26
+occurrences, previously guessed "likely → היתר") should also NOT map to any milestone status.
+
+Simply deleting the `EVENT_TO_STATUS` entry would not have been enough: `_map_event()` does
+first-substring-match over an ordered dict, so an event containing the full phrase
+`'הפקת טופס 4 להרצת מערכות'` would still match the more generic `'הפקת טופס 4'` key later in the
+same dict and get silently misclassified as real `טופס 4` again.
+
+### Fix
+
+`_map_event()` now checks for the substring `'הרצת מערכות'` first and returns `''` (unmapped)
+immediately, before the `EVENT_TO_STATUS` substring loop runs — so no phrasing of this
+commissioning-checkpoint event can ever match a later, more generic status key. The explicit
+`EVENT_TO_STATUS` entry was removed, and `'הפקת טופס 4 להרצת מערכות'` was added to
+`_UNMAPPED_EVENTS` for documentation consistency with its two siblings. Affects every Complot
+city, not just Ashkelon.
+
+### Re-check results (2026-07-22)
+
+Since this bug can only ever inflate a status upward (never mask a real one — `_map_event()`
+always picks the highest-rank event, so a false `טופס 4` only ever wins by outranking the real
+highest event), it was safe and sufficient to re-check only the permits already showing
+`scraped_status == 'טופס 4'` in each affected city's *current report*, via
+`scripts/recheck_tofes4_bug024.py` (`ComplotPermitsAPI.scrape_targeted()`, no list-phase
+rescrape needed):
+- **אשקלון**: 19 report rows re-checked, **5 changed** — 4 downgraded from `טופס 4` to the real
+  `היתר` (with correspondingly much-earlier corrected dates, e.g. permit `20220897`:
+  `13/04/2026` → `30/05/2023`), 1 kept `טופס 4` but with a corrected date. Matcher re-run:
+  report went from 57 → 53 rows, `status_advanced` from 37 → 33 (the 4 downgrades were no longer
+  upgrades over the tracked project's existing status).
+- **מורדות כרמל**: 7 report rows re-checked, **0 changed** — all genuinely at `טופס 4`.
+- **קרית אתא / ישובי הברון / רמת גן**: 0 permits currently at `טופס 4` in their scraped data at
+  all (separate, already-known scraper-staleness issues), so no re-check was possible/needed yet.
+- **בת ים**: 2 report rows at `טופס 4` were identified but not re-checked — its report is already
+  flagged stale for unrelated reasons (predates the `detail_block_lot`/permit-regex fixes), so
+  this is moot until that rescrape happens anyway.
+
+---
+
+## BUG-023 — Matcher: `מבני ציבור` (plural) not matched by `מבנה ציבור` (singular) in `_PUBLIC_USE_PATTERNS`; two Ashkelon high-rise construction types missing from `RELEVANT_TYPE_SUBSTRINGS`
+
+**Severity:** Medium — public-building permits leaked into the `untracked` report; genuine
+high-rise residential permits were invisible to the matcher entirely (never even reached the
+"not relevant" filter stage)
+**Fixed:** 2026-07-21
+**File:** `transform/matcher.py` → `_PUBLIC_USE_PATTERNS`, `RELEVANT_TYPE_SUBSTRINGS`
+
+### Root cause
+
+Same class of bug as BUG-016 (double-yod spelling variants) but for two different fields:
+
+1. `_PUBLIC_USE_PATTERNS` only listed the singular `מבנה ציבור`. Ashkelon and Holon's scraped
+   `shimush_ikari` field uses the plural `מבני ציבור` (693 permits in Ashkelon alone, 47 in
+   Holon) — a different word, not a substring match, so `_is_public_use()` never caught it.
+2. `RELEVANT_TYPE_SUBSTRINGS` had no entry matching Ashkelon's `בניה רוייה מעל 10 קומות` (97
+   permits) or `מבנה מגורים+מסחר מעל 10 ק` (15 permits) — both genuine new multi-story
+   residential/mixed-use construction (sample `shimush_ikari='מגורים חדש -רוויה'`, unit counts
+   26-154 units) but neither string contains `בניה חדשה` or any other tracked substring.
+
+Discovered via colleague's manual review of the Ashkelon report (`docs/אשקלון - יולי 2026.xlsx`)
+— he flagged 3 municipal permits (`20250351`-`20250353`) as incorrectly surfaced as `untracked`
+with the comment "לא רלוונטי - בקשה של העירייה למבני ציבור". Investigating why led to both gaps.
+
+### What broke
+
+- 3+ municipal public-building permits per scrape cycle surfaced as `untracked` in the Ashkelon
+  report instead of being silently dropped (noise for manual review, not a data-loss bug).
+- Up to 112 genuine high-rise residential/mixed permits in Ashkelon were never evaluated at all —
+  status upgrades on those permits would have been silently missed unless the permit also
+  happened to match a project via the `manual_review_event` path.
+
+### Fix
+
+Added `'מבני ציבור'` (plural) to `_PUBLIC_USE_PATTERNS`, and `'בניה רוייה מעל 10 קומות'` /
+`'מבנה מגורים+מסחר מעל 10 ק'` to `RELEVANT_TYPE_SUBSTRINGS`, both confirmed against real sample
+permits (with links) by Rotem. Re-ran Ashkelon matcher: report went from 43 rows (18
+status_advanced, 25 untracked) to 56 rows (36 status_advanced, 2 new_permit, 18 untracked) —
+the status_advanced jump reflects previously-invisible high-rise permits now correctly flagged.
 
 ---
 
