@@ -1,18 +1,73 @@
 # Next Steps — Project Update Scraper
 
-**Last Updated:** 2026-07-22 (Session W)
+**Last Updated:** 2026-07-23 (Session X)
 **Current Phase:** V1 — manual-review report only (no automatic backoffice writes)  
 **Scope:** Bat Yam via Complot; Holon + Kiryat Ata + Krayot + Hadera + Harel + Zmora + Mitzpe Afek
-via Bartech (all 6 rescraped-and-date-corrected as of Session W); ירושלים custom scraper built +
-full run + matcher (Session T, 61-row report as of Session V) + sweep enrichment (Session V,
-18,871/20,693 parcels resolved); אשקלון via Complot built + run + matcher (Session U, 53-row
-report as of Session W, permit_url_base confirmed); מורדות כרמל Complot triage confirmed final
-(Session W); Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report);
-nationwide pipeline in progress
+via Bartech (all 6 rescraped-and-date-corrected as of Session W); רמת גן via Complot rescraped +
+matched for the first time (Session X, 91-row report, sent to colleague); ירושלים custom scraper
+built + full run + matcher (Session T, 61-row report as of Session V) + sweep enrichment (Session
+V, 18,871/20,693 parcels resolved) + sweep matcher run with a 3-year recency pre-filter (Session
+X, 104-row report); אשקלון via Complot built + run + matcher (Session U, 53-row report as of
+Session W, permit_url_base confirmed); מורדות כרמל Complot triage confirmed final (Session W),
+report re-run twice more in Session X after BUG-025/026 fixes (24-row report, sent to colleague);
+Tel Aviv GIS-layer approach built + run + matcher (Session U, 107-row report); nationwide pipeline
+in progress. **Next city queued: רחובות (Rehovot) — not yet started.**
 
 ---
 
 ## Done
+
+### Session X — 2026-07-23
+
+Two tasks kicked off the session (Jerusalem sweep matcher run, Ramat Gan rescrape+match), which
+snowballed into a deep matcher-correctness investigation via colleague review of both Mordot
+Carmel and the new Ramat Gan report. Full detail in
+`docs/session_handoffs/SESSION_HANDOFF_2026_07_23_A.md` and `docs/BUG_REFERENCE.md` (BUG-025
+through BUG-027).
+
+- **Jerusalem sweep matcher run** (`scripts/run_jerusalem_sweep_matcher.py`, new) — first matcher
+  pass against the 20,693-row tik-number sweep (previously only enriched, never matched). Initial
+  unfiltered run: 3,161 rows (7 new_permit, 3,154 untracked) — investigated why the untracked
+  count was so high and found the sweep's source endpoint (`fetchTikRushiData`) has no
+  request/filing-date field at all (confirmed via a live call to the raw API), so the matcher's
+  365-day recency filter was a complete no-op for every sweep row, letting permits back to 2005
+  through unfiltered. Added a sweep-specific pre-filter (in the runner script only, not
+  `transform/matcher.py`) using `permit_status_date` (the one real date field the endpoint does
+  have) with a 3-year cutoff, agreed with Rotem. Re-run: **104 rows** (4 new_permit, 100
+  untracked) — a 96.7% cut in review volume, verified the 3 excluded new_permit permits were all
+  genuinely stale (last status update 2006 or early 2023).
+- **Ramat Gan rescrape + first-ever matcher run.** Previous scrape was IP-blocked/stale with no
+  report ever generated (see Session-prior open items). Full rescrape: 4,923/4,923 permits, 0
+  errors. First matcher run: 91 rows (5 new_permit, 1 status_advanced, 0 untracked, **85
+  manual_review**) — investigated the manual_review spike (Ramat Gan is a clear outlier; every
+  other live report has ≤2 manual_review rows) and found it's 100% תמ"א 38 permits from
+  2011-2016 hitting one of two appeals-committee events the matcher treats as inherently
+  ambiguous. Status-rank analysis of the 85: 75 unchanged (stale, no new info), 7 "behind" (see
+  BUG note below), 3 genuine upgrades masked by the flag (fixed via BUG-027).
+- **BUG-025** — matcher migrash comparison didn't normalize leading zeros (`'001'` vs `'1'`),
+  silently dropping a real Mordot Carmel status_advanced match (permit `20212109`, project
+  `Roth ברמות יצחק, נשר`) that a colleague flagged as "the scraper missed this" — traced through
+  every filter/match stage by hand to isolate `_pick_best_candidate`'s migrash check as the exact
+  failure point. Fixed with a new `_norm_migrash()` helper. Confirmed a genuine parcel-data gap
+  in a second flagged permit (`20210854`/`עמק הכרמל RESERVE`) — its actual block_lot is simply
+  absent from the project's tracked גוש-חלקה list, a data issue not a code bug.
+- **BUG-026** — added `בית אבות`/`מתקנים הנדסיים`/`חדר טרנספורמציה` to `_PUBLIC_USE_PATTERNS`,
+  plus a new requestor-based check (local-council/municipality-filed permits treated as public
+  use unless the permit cites an actual unit_count, since a council could legitimately build
+  public housing) — all from colleague's Mordot Carmel review. Left 3 other flagged permits
+  unfixed on Rotem's explicit call: no reliable data signal exists to confirm them (2 private
+  landed-housing requests with blank unit_count, 1 office-building case, plus a 4th
+  colleague-flagged "בית אבות" case where the scraped data has zero nursing-home signal at all).
+- **BUG-027** — the manual_review branch unconditionally suppressed a permit even when it also
+  qualified as a genuine new_permit/status_advanced upgrade on its own merits. Fixed by checking
+  upgrade-eligibility before applying the manual_review flag; also had to relax
+  `_scraped_date_is_actionable`'s "must be recent" fallback specifically for manual_review-flagged
+  permits (their triggering event is inherently old, e.g. an old appeals decision, which isn't
+  evidence the resulting rank upgrade is fake) while leaving BUG-009's core protection untouched
+  for every other permit. Ramat Gan re-run: manual_review 85 → 82, status_advanced 1 → 4.
+- **Both מורדות כרמל and רמת גן reports sent to colleague** at end of session.
+- **Next city queued: רחובות (Rehovot)** — scrape + match not yet started, explicitly deferred to
+  next session.
 
 ### Session W — 2026-07-22
 
@@ -550,6 +605,30 @@ BUG-024).
 
 ## Immediate — Do First Next Session
 
+### 0. Rehovot (רחובות) — next city to scrape and match
+
+Not yet started — explicitly queued by Rotem at the end of Session X (2026-07-23) as the next
+new city. No scraper/recon done yet; confirm system (Complot/Bartech/proprietary) via
+`config/committees.py` or the dispatcher reference before building a runner script.
+
+### 0b. Re-run remaining Complot/Bartech city matchers with BUG-025/026/027 fixes
+
+Three matcher-wide fixes landed in Session X (`transform/matcher.py`): migrash leading-zero
+normalization (BUG-025), new `_PUBLIC_USE_PATTERNS`/requestor-based public-use check (BUG-026),
+and manual_review no longer suppressing genuine upgrades (BUG-027). Only מורדות כרמל and רמת גן
+have been re-run since — every other city's report predates all three fixes and could contain
+the same classes of noise/missed-upgrade. Confirmed via a quick data check that all of these have
+real migrash + requestor data populated, so none are structurally immune:
+- אשקלון — already been through one colleague-review cycle (BUG-023/024); worth a re-run before
+  another round
+- הולון, קריות, חדרה, הראל, זמורה, מיצפה אפק (6 Bartech cities) — none colleague-reviewed yet
+- ירושלים (main `jerusalem_report.xlsx` + sweep) — has requestor/shimush_ikari data BUG-026 could
+  touch
+- ישובי הברון — unclear staleness beyond predating the fixes
+
+Not worth re-matching until a full rescrape happens anyway (known scraper-level issues, not
+matcher issues): בת ים, קרית אתא, תל אביב GIS (also never had a correctness spot-check at all).
+
 ### 1. ~~Complot triage artifact — colleagues to finish classifying~~ — CLOSED (2026-07-22)
 
 Rotem confirmed `docs/Request Status's- Claude (1).docx` is the **final** colleague mapping —
@@ -889,7 +968,8 @@ the real search UI (not direct API calls with a replayed token).
 
 | Committee | Report | Key figures |
 |---|---|---|
-| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 10 status_advanced, 16 untracked, 2 manual_review — triage confirmed **final** and already fully applied (2026-07-22, see item #1); no reclassification pending |
+| מורדות כרמל | `outputs/mordot_carmel_report.xlsx` | 9 status_advanced, 13 untracked, 2 manual_review — re-run twice in Session X after BUG-025 (migrash leading-zero fix) and BUG-026 (public-use pattern/requestor fixes); **sent to colleague 2026-07-23** |
+| רמת גן | `outputs/ramat_gan_report.xlsx` | 5 new_permit, 4 status_advanced, 0 untracked, 82 manual_review — first-ever matcher run (Session X), current with BUG-025/026/027; **sent to colleague 2026-07-23** |
 | קרית אתא | `outputs/kiryat_ata_report.xlsx` | 14 status_advanced, 41 untracked, 59 manual_review — pre-migrash-fix; consider re-scraping to pick up BUG-019 fix like the Bartech cities were |
 | הולון | `outputs/holon_report.xlsx` | 42 status_advanced, 36 untracked, 0 manual_review (rescraped Session S) |
 | קריות | `outputs/krayot_report.xlsx` | 36 status_advanced, 14 untracked, 0 manual_review (rescraped Session S) |

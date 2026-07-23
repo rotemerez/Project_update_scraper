@@ -108,15 +108,38 @@ _PUBLIC_USE_PATTERNS = [
     'אולם ספורט', 'בריכה', 'בית חולים', 'מרפאה',
     'בית עלמין', 'תחנת דלק', 'בנין ציבורי',
     'תחנת טרנספורמציה', 'תעשיה', 'תשתיות', 'שונות',
+    'בית אבות',            # nursing home -- confirmed by Rotem 2026-07-23 (Mordot Carmel review)
+    'מתקנים הנדסיים',     # engineering installations (e.g. water-pump booster) -- confirmed
+                           # by Rotem 2026-07-23 (Mordot Carmel review)
+    'חדר טרנספורמציה',    # transformer room -- distinct phrase from the already-tracked
+                           # 'תחנת טרנספורמציה' (station); confirmed by Rotem 2026-07-23
+]
+
+# Requestor markers indicating the permit was filed by a municipality/local council itself --
+# public infrastructure work, not a residential/commercial project Madlan tracks. Confirmed by
+# Rotem 2026-07-23 (Mordot Carmel review, מועצה מקומית רכסים). Exception: a local council can
+# legitimately build public housing, so this only excludes when no unit_count is cited --
+# a permit with a real unit count is left to the normal relevance/unit-minimum checks instead
+# of being blanket-excluded on requestor alone.
+# 'מועצה מקומית' is checked as two separate word tokens rather than one fixed substring --
+# the Hebrew definite article can land between them ('מועצה המקומית'), same class of phrasing
+# variance as the double-yod bug (BUG-016).
+_PUBLIC_BODY_REQUESTOR_WORD_PAIRS = [
+    ('מועצה', 'מקומית'),
+]
+_PUBLIC_BODY_REQUESTOR_PATTERNS = [
+    'עיריית', 'עירייה',
 ]
 
 
 def _is_public_use(permit: pd.Series) -> bool:
     """
-    True if shimush_ikari or bakasha_description indicates a public/institutional
+    True if shimush_ikari, bakasha_description, or requestor indicates a public/institutional
     building that is not tracked as a Madlan project per נוהל הקמת פרויקטים.
     shimush_ikari (added to Complot scraper output) takes priority when present.
     bakasha_description fallback only matches very clear primary-use indicators.
+    A municipality/local-council requestor is treated as public use unless the permit cites
+    an actual unit_count (the council could be building public housing, not infrastructure).
     """
     shimush = _clean(permit.get('shimush_ikari', ''))
     if shimush and any(pat in shimush for pat in _PUBLIC_USE_PATTERNS):
@@ -124,6 +147,12 @@ def _is_public_use(permit: pd.Series) -> bool:
     bakasha = _clean(permit.get('bakasha_description', ''))
     if bakasha and any(pat in bakasha for pat in _PUBLIC_USE_PATTERNS):
         return True
+    requestor = _clean(permit.get('requestor', ''))
+    if requestor and not _clean(permit.get('unit_count', '')):
+        if any(pat in requestor for pat in _PUBLIC_BODY_REQUESTOR_PATTERNS):
+            return True
+        if any(w1 in requestor and w2 in requestor for w1, w2 in _PUBLIC_BODY_REQUESTOR_WORD_PAIRS):
+            return True
     return False
 
 
@@ -347,15 +376,20 @@ def _parse_migrash_set(val) -> set:
             continue
         m = re.search(r'מגרש\s*(\d+)', part)
         if m:
-            result.add(m.group(1))
+            result.add(_norm_migrash(m.group(1)))
             continue
         m = re.search(r'\+\s*(\d+)\s*$', part)
         if m:
-            result.add(m.group(1))
+            result.add(_norm_migrash(m.group(1)))
             continue
         if re.fullmatch(r'\d+', part):
-            result.add(part)
+            result.add(_norm_migrash(part))
     return result
+
+
+def _norm_migrash(digits: str) -> str:
+    """Strip leading zeros so '001' and '1' compare equal (same migrash, different padding)."""
+    return str(int(digits))
 
 
 def _fuzzy_name_score(name1: str, name2: str) -> int:
@@ -386,6 +420,8 @@ def _pick_best_candidate(
     otherwise misattribute the permit to an unrelated migrash on the same gush/helka.
     """
     permit_migrash = _clean(permit.get('migrash', ''))
+    if permit_migrash and re.fullmatch(r'\d+', permit_migrash):
+        permit_migrash = _norm_migrash(permit_migrash)
 
     if permit_migrash:
         migrash_sets = {idx: _parse_migrash_set(projects_df.loc[idx].get(_BO_MIGRASH_COL, '')) for idx in candidates}
@@ -619,20 +655,58 @@ def run(
             type_known     = bool(request_type)
             type_relevant  = _is_relevant_type(request_type)
 
-            # Manual review: matched permit has a flagged event — surface after applying
-            # the same project-criteria filters used for other branches.
-            # Exception: הוצאת היתר בניה is confirmed as היתר when תאריך הפקת היתר was
-            # present on the page (scraped_status == 'היתר'). Fall through to normal logic.
+            project_sug_bnia = _clean(proj.get('סוג בנייה', ''))
+            waive_unit_min = 'תמ"א 38' in project_sug_bnia
+
             manual_review_event = _clean(permit.get('manual_review_event', ''))
             hitir_confirmed = (manual_review_event == 'הוצאת היתר בניה'
                                and scraped_status == 'היתר')
+
+            # Date-actionability check for the upgrade case. Normally requires
+            # _scraped_date_is_actionable (BUG-009: a permit with no project dates to compare
+            # against must itself be recent, or ancient scraped data would flood the report as
+            # false "new" activity). Relaxed to skip that recency fallback specifically when a
+            # manual_review_event is present -- these permits are inherently old by nature (the
+            # ambiguous event, e.g. an appeals-committee decision, is itself old), and that
+            # age is not evidence the rank upgrade it represents is fake. The "must be after any
+            # existing project date" half of the check still applies either way.
             if manual_review_event and not hitir_confirmed:
+                _scraped_dt = _parse_date(permit.get('permit_status_date'))
+                _latest_dt = _latest_project_date(proj)
+                date_actionable = (
+                    _scraped_dt is None or _latest_dt is None or _scraped_dt > _latest_dt
+                )
+            else:
+                date_actionable = _scraped_date_is_actionable(permit, proj)
+
+            is_new_permit_case = (
+                db_status_raw == 'טרום בקשה' and (type_relevant or not type_known)
+                and _is_recent(permit.get('request_date'))
+                and not _is_public_use(permit)
+                and (waive_unit_min or not _is_below_unit_minimum(permit))
+            )
+            is_upgrade_case = (
+                _is_upgrade(db_status_norm, scraped_status)
+                and date_actionable
+                and (_is_relevant_type(_clean(permit.get('request_type', '')))
+                     or _is_relevant_type(_clean(permit.get('bakasha_description', ''))))
+                and not _is_public_use(permit)
+                and (waive_unit_min or not _is_below_unit_minimum(permit))
+            )
+
+            # Manual review: matched permit has a flagged event — surface after applying
+            # the same project-criteria filters used for other branches. Exception 1:
+            # הוצאת היתר בניה is confirmed as היתר when תאריך הפקת היתר was present on the
+            # page (scraped_status == 'היתר'). Exception 2: if the permit already qualifies
+            # as a genuine new_permit/status_advanced upgrade on its own merits, that takes
+            # priority over the ambiguous-event flag — a real status change shouldn't be
+            # hidden behind manual_review just because the same permit also once touched an
+            # ambiguous event (e.g. an old, already-resolved appeals-committee decision).
+            if manual_review_event and not hitir_confirmed and not (is_new_permit_case or is_upgrade_case):
                 if not type_relevant:
                     continue
                 if _is_public_use(permit):
                     continue
-                # Waive unit minimum when the matched project is a תמ"א 38 project
-                project_sug_bnia = _clean(proj.get('סוג בנייה', ''))
                 if 'תמ"א 38' not in project_sug_bnia and _is_below_unit_minimum(permit):
                     continue
                 report_rows.append(_make_row(
@@ -646,13 +720,7 @@ def run(
                 ))
                 continue
 
-            project_sug_bnia = _clean(proj.get('סוג בנייה', ''))
-            waive_unit_min = 'תמ"א 38' in project_sug_bnia
-
-            if db_status_raw == 'טרום בקשה' and (type_relevant or not type_known) \
-                    and _is_recent(permit.get('request_date')) \
-                    and not _is_public_use(permit) \
-                    and (waive_unit_min or not _is_below_unit_minimum(permit)):
+            if is_new_permit_case:
                 report_rows.append(_make_row(
                     flag='new_permit',
                     proj=proj,
@@ -665,12 +733,7 @@ def run(
                     request_url=_permit_url(_clean(permit.get('request_number', ''))),
                 ))
 
-            elif _is_upgrade(db_status_norm, scraped_status) \
-                    and _scraped_date_is_actionable(permit, proj) \
-                    and (_is_relevant_type(_clean(permit.get('request_type', '')))
-                         or _is_relevant_type(_clean(permit.get('bakasha_description', '')))) \
-                    and not _is_public_use(permit) \
-                    and (waive_unit_min or not _is_below_unit_minimum(permit)):
+            elif is_upgrade_case:
                 report_rows.append(_make_row(
                     flag='status_advanced',
                     proj=proj,

@@ -1,6 +1,170 @@
 # Bug Reference — Project Update Scraper
 
-**Last Updated:** 2026-07-22
+**Last Updated:** 2026-07-23
+
+---
+
+## BUG-027 — Matcher: `manual_review` unconditionally suppressed genuine `new_permit`/`status_advanced` upgrades on the same permit
+
+**Severity:** Medium — real, actionable status progress was hidden behind an ambiguous-event
+flag purely because the same permit also once touched that event, not because the progress
+itself was in doubt
+**Fixed:** 2026-07-23
+**File:** `transform/matcher.py` → manual_review branch (main matching loop), `run()`
+
+### Root cause
+
+Any permit with a `manual_review_event` (e.g. an appeals-committee decision) was routed straight
+to `flag='manual_review'` unconditionally — the code never checked whether the permit's status
+had also genuinely advanced past the tracked project's `db_status`. Investigating Ramat Gan's 85
+`manual_review` rows (see BUG-026's session) found 3 genuine upgrades (`טרום בקשה` → `בקשה
+להיתר`) buried in that pile, invisible unless someone manually re-derived status ranks.
+
+Attempting the obvious fix (only flag `manual_review` when the permit *isn't* also a qualifying
+`new_permit`/`status_advanced` case) initially had no effect on those 3 rows: they still failed
+`_scraped_date_is_actionable()` (BUG-009's anti-false-positive check), which requires a scraped
+date to be recent *only* when the project has no existing milestone dates to compare against —
+true for `טרום בקשה` projects. These 3 permits' status dates are from 2012-2013, so the "must be
+recent" fallback rejected them even though the rank upgrade itself was completely genuine. The
+manual_review scenario is inherently prone to this: the ambiguous event that got it stuck there
+(e.g. an old appeals-committee decision) is itself typically old, so requiring the *resolution*
+of that old event to also be recent defeats the point of confirming it resolved into real
+progress.
+
+### Fix
+
+Two changes:
+1. Before applying the `manual_review` flag, the loop now computes whether the permit already
+   qualifies as `new_permit` or `status_advanced` on its own merits; if so, the ambiguous-event
+   flag is skipped and the permit falls through to the normal upgrade branches instead.
+2. The date-actionability check used for that upgrade computation is relaxed specifically when
+   a `manual_review_event` is present: it still requires the scraped date to be after any
+   existing project date (BUG-009's core protection, unchanged), but skips the "must be recent"
+   fallback for projects with no existing dates. This relaxation applies **only** to
+   manual_review-flagged permits — the general `status_advanced` path (no manual_review_event)
+   is completely unchanged, so BUG-009's fix stays fully intact for the rest of the report.
+
+### Verified
+
+Re-ran `scripts/run_ramat_gan_matcher.py`: report stayed at 91 rows (pure reclassification, no
+rows added/removed) — `status_advanced` went 1 → 4, `manual_review` went 85 → 82. Confirmed the
+exact 3 permits (`2011406`, `2011500`, `2012339`) moved to `status_advanced`; all other rows
+unchanged.
+
+---
+
+## BUG-026 — Matcher: `_is_public_use` missing `בית אבות`/`מתקנים הנדסיים`/`חדר טרנספורמציה` patterns; no requestor-based check for municipality-filed permits
+
+**Severity:** Low — noise in the `untracked`/`status_advanced` report, not a data-loss bug (same
+class as BUG-023)
+**Fixed:** 2026-07-23
+**File:** `transform/matcher.py` → `_PUBLIC_USE_PATTERNS`, new `_PUBLIC_BODY_REQUESTOR_PATTERNS`
+/ `_PUBLIC_BODY_REQUESTOR_WORD_PAIRS`, `_is_public_use()`
+
+### Root cause
+
+Colleague's manual review of `מורדות הכרמל - יולי 2026.xlsx` flagged 5 permits as irrelevant that
+the matcher had surfaced anyway:
+- `20230673` (`shimush_ikari='מסחר,משרדים ובית אבות'`) and `20260098`'s sibling `20260639`
+  claimed as nursing-home — `בית אבות` was never in `_PUBLIC_USE_PATTERNS`.
+- `20242080` (`shimush_ikari='מתקנים הנדסיים'`, a water-pump booster) — no pattern matched this
+  phrase either.
+- `20252292`/`20252293` (`shimush_ikari='חדר טרנספורמציה'`) — distinct phrase from the
+  already-tracked `תחנת טרנספורמציה` (transformer *station* vs. transformer *room*).
+- `20261274` (`shimush_ikari='דרך ומבנה דרך'`, requestor `מועצה המקומית רכסים`) — no
+  shimush_ikari pattern matched, and requestor itself (a local council) was never checked at all.
+
+The requestor check needed care: a local council filing a permit is usually public
+infrastructure, but a council can legitimately build public housing, so requestor alone can't be
+a blanket exclusion. First attempt at the requestor pattern (`'מועצה מקומית'` as one fixed
+substring) missed `20261274`'s actual value `'מועצה המקומית רכסים'` — the definite article `ה`
+lands between the two words, same class of phrasing variance as the double-yod bug (BUG-016).
+
+### Fix
+
+Added `בית אבות`, `מתקנים הנדסיים`, `חדר טרנספורמציה` to `_PUBLIC_USE_PATTERNS`. Added a
+requestor-based check in `_is_public_use()`: matches `עיריית`/`עירייה`, or the word pair
+`('מועצה', 'מקומית')` checked as two independent substrings rather than one fixed phrase (so
+`'מועצה המקומית'` matches too) — and only excludes when the permit has no `unit_count`, so a
+council-filed permit that does cite a unit count (potential public housing) isn't blanket-dropped.
+
+### Left alone — not enough data to confirm
+
+Two other colleague comments on the same review were explicitly left unfixed (Rotem's call,
+2026-07-23):
+- `20251541`/`20260301` — private-individual landed-housing requests the colleague judged
+  sub-minimum, but `unit_count` is blank and no text field states a count; no reliable signal
+  exists to distinguish these from a legitimate small multi-unit build.
+- `20260098` — office building "not for rent or sale"; `shimush_ikari='משרדים'` alone can't be
+  blanket-excluded without risking legitimate mixed residential+commercial projects (already
+  tracked under types like `מסחר ומגורים`).
+- `20260639` — also flagged by the colleague as `בית אבות`, but its actual scraped data
+  (`shimush_ikari='מגורים , מסחרי ומשרדים'`, blank `bakasha_description`) has zero nursing-home
+  signal anywhere — confirmed by inspecting every field; genuinely unconfirmable from our data,
+  not a missed pattern.
+
+### Verified
+
+Re-ran `scripts/run_mordot_carmel_matcher.py`: report went from 29 → 24 rows, dropping exactly
+the 5 targeted permits (`20230673`, `20242080`, `20252292`, `20252293`, `20261274`) and nothing
+else — the 4 left-alone permits above are still present, confirmed unaffected.
+
+---
+
+## BUG-025 — Matcher: migrash comparison didn't normalize leading zeros, silently dropping a real `status_advanced` match
+
+**Severity:** High — a genuine, matched status upgrade (טופס 4 issued) was silently dropped from
+the report entirely, not even surfaced as `untracked`. Found via colleague manual review of
+`מורדות הכרמל - יולי 2026.xlsx`, flagged as "the scraper missed this Form 4" — investigation
+showed the scraper had captured it correctly; the matcher discarded the match.
+**Fixed:** 2026-07-23
+**File:** `transform/matcher.py` → `_parse_migrash_set()`, `_pick_best_candidate()` (new
+`_norm_migrash()` helper)
+
+### Root cause
+
+BUG-019 (Session S) made `_pick_best_candidate()` deliberately decline a match (return `None`)
+rather than guess, whenever a permit's migrash doesn't appear in any candidate project's parsed
+migrash set — the right instinct for a genuine gush/helka-shared-by-multiple-migrashim ambiguity.
+But the comparison was a raw string containment check (`permit_migrash in migrash_sets[idx]`)
+with no numeric normalization on either side. Project `Roth ברמות יצחק, נשר`'s BO record listed
+migrash `'1'` (parsed from `'מכ/772+002 , 355-0239871+1'`); permit `20212109` scraped migrash
+`'001'` — the same sub-plot, just zero-padded. `'001' != '1'` as strings, so the migrash-hit set
+was empty, and `_pick_best_candidate` returned `None` — treating a real match as "no confident
+match" and dropping it, even though every other signal (gush/helka, upgrade direction, date,
+type) was unambiguous. Confirmed by manually tracing the exact permit through every filter stage
+and match step in `transform/matcher.py`'s `run()` — everything before the migrash check passed
+cleanly; `_pick_best_candidate` was the only point of failure.
+
+### What broke
+
+Permit `20212109` (project `Roth ברמות יצחק, נשר`, `היתר בניה` → `טופס 4`, 14/06/2026) never
+appeared in `outputs/mordot_carmel_report.xlsx` under any flag — not `status_advanced`, not even
+`untracked` (it separately fails the unmatched-permit recency check since its `request_date` is
+from 2021). A real, actionable status upgrade was invisible to the report with no trace of why.
+Any permit anywhere with a zero-padded migrash value (`'001'`, `'002'`, etc.) that doesn't
+exactly string-match the project file's own formatting is at risk of the same silent drop.
+
+### Fix
+
+Added `_norm_migrash(digits)` (strips leading zeros via `str(int(digits))`) and applied it both
+when `_parse_migrash_set()` builds a project's migrash set and when `_pick_best_candidate()`
+normalizes the permit's own migrash value before comparison — so `'1'`, `'01'`, and `'001'` all
+compare equal. Shared by every city's report, not Mordot-Carmel-specific.
+
+### Verified
+
+Re-ran `scripts/run_mordot_carmel_matcher.py`: report went from 28 → 29 rows, `status_advanced`
+from 10 → 11 — the new row is exactly permit `20212109`/`Roth ברמות יצחק, נשר` as expected, with
+no other rows changed.
+
+### Related, not a matcher bug
+
+The colleague's review also flagged permit `20210854` (project `עמק הכרמל RESERVE, נשר`) as a
+second "missed" Form 4. That one's block_lot (`11236-24`) is genuinely absent from the project's
+tracked גוש-חלקה list (`11236-25` is tracked, `11236-24` isn't, likely a data-entry gap) — a
+tracked-projects data issue, not a code bug. Needs a manual correction to the project's parcel
+list, not a matcher fix.
 
 ---
 
